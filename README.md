@@ -12,6 +12,7 @@ This should work straight away on an M5PaperS3,  for other epaper devices that u
 The main differences between this and, I think, all other ESP32-S3 epaper drivers:
 * Uses ESP32-S3 Vector code to calculate 64 pixels at a time.
 * Uses a different way of using DMA.  The standard ESP32-S3 I80 drivers (using esp_lcd_panel_io_i80_config_t and esp_lcd_panel_io_tx_color), are terrible, and the biggest bottleneck for high performance.  After battling hard trying to get it to perform, I found this adafruit blog.  https://blog.adafruit.com/2022/06/21/esp32uesday-more-s3-lcd-peripheral-hacking-with-code/  -  I ripped it out, and used the LCD_CAM driver instead.  Far far faster.
+* Just 4 colours (2 bit).  I don't see this changing soon, due to the way the vector code shift bits...   epaper receives commands in 2 bits per pixel,  and 4 colours are 2 bits per pixel... to convert between requires a few boolean operations...and incredibly quick.  There maybe ways though ....maybe do multiple passes with different waveform arrays? but, this is far future.
 
 # todo
 * Make this a propper library
