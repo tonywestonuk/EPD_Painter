@@ -5,7 +5,13 @@ Currently just a Proof of concept Arduino project.
 
 Download, open in arduino IDE.
 
+You need to add the Adafruit GFX Library, to get things going.  It might not be the fastest out there, but its rock solid.
+
 This should work straight away on an M5PaperS3,  for other epaper devices that use an ESP32-S3, update the pins in EPD_Painter.h
+
+The main differences between this and, I think, all other ESP32-S3 epaper drivers:
+* Uses ESP32-S3 Vector code to calculate 64 pixels at a time.
+* Uses a different way of using DMA.  The standard ESP32-S3 I80 drivers (using esp_lcd_panel_io_i80_config_t and esp_lcd_panel_io_tx_color), are terrible, and the biggest bottleneck for high performance.  After battling hard trying to get it to perform, I found this adafruit blog.  https://blog.adafruit.com/2022/06/21/esp32uesday-more-s3-lcd-peripheral-hacking-with-code/  -  I ripped it out, and used the LCD_CAM driver instead.  Far far faster.
 
 # todo
 * Make this a propper library
