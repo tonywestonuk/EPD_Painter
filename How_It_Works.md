@@ -210,7 +210,7 @@ This serves two purposes:
 
 1. **Reduces flicker** — not all rows receive the same aggressive drive
    simultaneously, so the visual effect is smoother.
-2. **Speed** — The user gets to see the image faster. In just 6 passes they would see the image appearing. 
+2. **Perceptual Speed** — The user gets to see the image faster. In just 6 passes they would see the image appearing. 
 
 The `ink_on` and `ink_off` functions also respect interlacing — each call
 processes only even or only odd rows, controlled by the `interlace_period`
