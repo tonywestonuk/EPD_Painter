@@ -134,7 +134,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
     // CKV falling then rising edge clocks the row pointer forward by one.
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << PIN_LE));    // LE=1 (latch previous row)
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << PIN_CKV));   // CKV=0 (begin row advance)
-    delayMicroseconds(5);                            // hold time required by panel
+    delayMicroseconds(20);                            // hold time required by panel
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << PIN_CKV));   // CKV=1 (row pointer advanced)
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << PIN_LE));    // LE=0 (latch complete)
   }

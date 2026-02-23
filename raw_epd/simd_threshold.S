@@ -25,8 +25,7 @@
 // INTERLACING:
 //   The EPD panel is driven in an interlaced fashion — on alternating
 //   frames, even rows are driven with the "darker" waveform and odd
-//   rows with "lighter", then they swap. This reduces flicker and
-//   distributes stress on the panel evenly.
+//   rows with "lighter", then they swap. 
 // =============================================================================
 
     .text
