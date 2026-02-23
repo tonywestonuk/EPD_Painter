@@ -362,12 +362,12 @@ control signals manage the row pointer:
 ### Timing for the First Row
 
 ```
-  SPV  ──┐           ┌──────────────────
-         └───────────┘
-  CKV  ──────┐   ┌─────────────────────
-             └───┘
-              ↑
-         Row pointer resets to line 0 here
+  SPV  ──┐    ┌─────
+         └───-┘
+  CKV  ──┐   ┌─────
+         └───┘
+          ↑
+Row pointer resets to line 0 here
 ```
 
 ### Timing for Subsequent Rows
@@ -375,10 +375,10 @@ control signals manage the row pointer:
 ```
   LE   ──┐       ┌────
          └───────┘
-  CKV  ──┐       ┌────
-         └───────┘
-              5µs hold  (for now...may increase to improve quality)
-              ↑
+  CKV  ──-┐     ┌────
+          └─────┘
+           5µs hold  (for now...may increase to improve quality)
+            ↑
          Row pointer advances here; previous row's data is latched
 ```
 
