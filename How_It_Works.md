@@ -446,7 +446,7 @@ in several stages:
            → screen buffer reset to all 0x00
 
   Stage 3: 6 lighter waveform passes
-           → gradually drives all pixels toward white
+           → moves inked pixes to white,  Dischargeing any (known about) DC bias.
 
   Stage 4: Hard erase — 4 passes each of:
            0b01010101 (full positive drive, all pixels)
@@ -458,6 +458,8 @@ in several stages:
 
 The alternating hard drive in Stage 4 forces all particles fully to one
 extreme and then the other, ensuring the panel is in a known clean state.
+
+Note that clear does not actually clear the AdafruitGFX framebuffer,  only the screen.  The next time paint() is called, the previous image will be redrawn, on a fresh 
 
 ---
 
