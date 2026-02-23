@@ -32,10 +32,11 @@ Each pixel contains both black and white particles:
 
 ```
   Positive electrode (top)
-  ┌──────────────────────────────┐
-  │  ○ ○ ○ ● ● ● ● ○ ○ ●  ...  │   ← white particles (○) and black particles (●)
-  │        fluid medium          │      floating in a microcapsule
-  └──────────────────────────────┘
+  ┌───────────────────────┐
+  │                       |
+  |  ○ ○ ○ ● ● ● ● ○ ○ ●  │   ← white particles (○) and black particles (●)
+  │     fluid medium      │      floating in a microcapsule
+  └───────────────────────┘
   Negative electrode (bottom)
 
   Apply + voltage → black particles rise → pixel appears BLACK
@@ -61,7 +62,7 @@ significant bits** are meaningful here; the upper 6 bits are ignored.
 
 ```
   Byte in canvas:  [ x x x x x x P P ]
-                                  └─┘
+                                 └─┘
                              2-bit pixel value
 ```
 
@@ -75,7 +76,7 @@ significant bits** are meaningful here; the upper 6 bits are ignored.
 ### Stage 2 — Packed Framebuffer (2bpp, 4 pixels per byte)
 
 `epd_painter_compact_pixels()` compresses the canvas by packing 4 pixels into
-each byte. This is what lives in `packed_fastbuffer` and `packed_screenbuffer`.
+each byte. This is what lives in `packed_fastbuffer` and `packed_screenbuffer`. 
 
 ```
   4 canvas bytes:    [00PP] [00PP] [00PP] [00PP]
@@ -86,7 +87,7 @@ each byte. This is what lives in `packed_fastbuffer` and `packed_screenbuffer`.
 
 This 4× compression matters because the 960×540 panel would otherwise need
 518,400 bytes per framebuffer. At 2bpp it costs only 129,600 bytes — small
-enough to fit in internal RAM for the fast path.
+enough to fit in internal RAM for the fast path.  The 2bpp also matches the Ink drive format (described below) which makes the vector code to translate it into that format much easier, and hence faster.
 
 ### Stage 3 — Ink Drive Format (for DMA output)
 
@@ -97,11 +98,11 @@ for each electrode:
 
 ```
   Packed byte:  [ P3 P3 P2 P2 P1 P1 P0 P0 ]
-                  └┬┘  └┬┘  └┬┘  └┬┘
-                   │    │    │    └── pixel 0: bit1=positive electrode, bit0=negative
-                   │    │    └─────── pixel 1
-                   │    └──────────── pixel 2
-                   └───────────────── pixel 3
+                  └-┬-┘ └-┬-┘ └-┬-┘ └-┬-┘
+                    │     │     │     └── pixel 0: bit1=positive electrode, bit0=negative
+                    │     │     └───────  pixel 1
+                    │     └────────────   pixel 2
+                    └─────────────────    pixel 3
 
   Drive codes:  00 = no drive (float)
                 01 = drive negative  (whiten)
@@ -127,16 +128,9 @@ needs to be read once per frame, so speed is less critical).
 
 **Why is this necessary?**
 
-E-paper pixels cannot jump directly between two non-white shades. A pixel that
-is dark grey and needs to become light grey must:
+If the driver doesn't know what colour pixel, it would need to start from scratch every update, moving the pixel to full white, then
+to the actual colour it needs to be. This causes the panel to flash.
 
-```
-  dark grey  →  white  →  light grey
-     (ink_off clears it)    (ink_on sets it next frame)
-```
-
-Without the screen buffer, the code would have no way to know which pixels are
-already on-screen and which transitions are legal.
 
 ---
 
@@ -161,6 +155,28 @@ grey `01`) and 6 columns (one per pass):
                 2 = darken (-)    3 = both simultaneously
 ```
 
+### The Printing Press Analogy
+
+This process is conceptually very close to how a traditional printing press
+works. A press applies each ink colour in a separate pass — cyan, magenta,
+yellow, black — and the final image emerges from their combination across
+all passes.
+
+Here, the three "inks" are the drive patterns for each greyscale shade
+(black, dark grey, light grey). On each pass, all three are loaded
+simultaneously and stamped onto the 64-pixel chunk at once, each one
+landing only on the pixels it belongs to:
+
+```
+  Traditional press:                  EPD waveform pass:
+
+  Cyan plate   → only cyan pixels     Waveform for 11  → only black pixels
+  Magenta plate→ only magenta pixels  Waveform for 10  → only dark grey pixels
+  Yellow plate → only yellow pixels   Waveform for 01  → only light grey pixels
+        │                                     │
+        └── all applied in one roller pass    └── all applied in one 64-pixel chunk
+```
+
 For each pass, the waveform bytes for all three pixel groups are packed into a
 single `uint32_t` and broadcast across the Q register in the assembly routine:
 
@@ -168,12 +184,9 @@ single `uint32_t` and broadcast across the Q register in the assembly routine:
   uint32_t waveform = ( waveform[0][pass] << 16      // for 11 pixels
                       + waveform[1][pass] << 8        // for 10 pixels
                       + waveform[2][pass]      )      // for 01 pixels
-                      * 0x55;
 ```
 
-Multiplying by `0x55` (= `0b01010101`) replicates the 2-bit drive code into
-all byte positions of the word, which the assembly then masks and applies
-selectively to each pixel.
+
 
 ---
 
@@ -197,9 +210,7 @@ This serves two purposes:
 
 1. **Reduces flicker** — not all rows receive the same aggressive drive
    simultaneously, so the visual effect is smoother.
-2. **DC balance** — alternating the drive direction between frames prevents
-   charge from accumulating in one direction inside the panel, which would
-   cause ghosting over time.
+2. **Speed** — The user gets to see the image faster. In just 6 passes they would see the image appearing. 
 
 The `ink_on` and `ink_off` functions also respect interlacing — each call
 processes only even or only odd rows, controlled by the `interlace_period`
@@ -219,15 +230,15 @@ physical state (`packed_screenbuffer`) and work out what needs to be driven.
 ```
   For each pixel (in the active interlace rows):
 
-  ┌─────────────────────┬──────────────────────────────────────────┐
-  │  Screen buffer      │  Action                                   │
-  ├─────────────────────┼──────────────────────────────────────────┤
-  │  00  (white)        │  Copy new pixel value to output           │
-  │                     │  Mark pixel in screen buffer              │
-  ├─────────────────────┼──────────────────────────────────────────┤
-  │  01/10/11 (non-white│  Skip — pixel is already occupied.        │
-  │           )         │  ink_off must clear it to white first.    │
-  └─────────────────────┴──────────────────────────────────────────┘
+  ┌─────────────────────-┬──────────────────────────────────────────┐
+  │  Screen buffer       │  Action                                  │
+  ├─────────────────────-┼──────────────────────────────────────────┤
+  │  00  (white)         │  Copy new pixel value to output          │
+  │                      │  Mark pixel in screen buffer             │
+  ├─────────────────────-┼──────────────────────────────────────────┤
+  │  01/10/11 (non-white)│  Skip — pixel is already occupied.       │
+  │                      │  ink_off must clear it to white first.   │
+  └─────────────────────-┴──────────────────────────────────────────┘
 ```
 
 The mask logic in the assembly works by spreading each pixel's bits — if
@@ -300,15 +311,15 @@ row of pixel data is sent to the EPD panel quickly.
   ┌─────────────────────────────────────────────┐
   │                                             │
   │  PSRAM / Internal RAM                       │
-  │  ┌──────────────┐   ┌──────────────────┐   │
-  │  │  DMA buffer1 │   │  DMA descriptor1 │   │
-  │  │  (row data)  │←──│  .buffer = buf1  │   │
-  │  └──────────────┘   │  .next   = desc2 │   │
+  │  ┌──────────────┐   ┌──────────────────┐    │
+  │  │  DMA buffer1 │   │  DMA descriptor1 │    │
+  │  │  (row data)  │←──│  .buffer = buf1  │    │
+  │  └──────────────┘   │  .next   = desc2 │    │
   │                      └────────┬─────────┘   │
-  │  ┌──────────────┐   ┌────────▼─────────┐   │
-  │  │  DMA buffer2 │   │  DMA descriptor2 │   │
-  │  │  (row data)  │←──│  .buffer = buf2  │   │
-  │  └──────────────┘   │  .next   = desc1 │◄─ ┤ circular chain
+  │  ┌──────────────┐   ┌────────▼─────────┐    │
+  │  │  DMA buffer2 │   │  DMA descriptor2 │    │
+  │  │  (row data)  │←──│  .buffer = buf2  │    │
+  │  └──────────────┘   │  .next   = desc1 │◄─ -┤ circular chain
   │                      └──────────────────┘   │
   │         ↑                                   │
   │       GDMA ──────────────────────────────►  │
@@ -364,9 +375,9 @@ control signals manage the row pointer:
 ```
   LE   ──┐       ┌────
          └───────┘
-  CKV  ──────┐       ┌────
-             └───────┘
-              5µs hold
+  CKV  ──┐       ┌────
+         └───────┘
+              5µs hold  (for now...may increase to improve quality)
               ↑
          Row pointer advances here; previous row's data is latched
 ```
@@ -375,7 +386,7 @@ control signals manage the row pointer:
 
 ```
   1. Swap DMA buffer (CPU fills the one DMA just finished with)
-  2. Wait for previous DMA transfer to complete
+  2. Wait for previous DMA transfer to complete (if active)
   3. Issue timing signals (SPV pulse on row 0, LE+CKV pulse otherwise)
   4. Start DMA transfer (LCD_CAM clocks data onto D0–D7)
   5. On the last row: wait for DMA to finish, then issue final latch pulse
