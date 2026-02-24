@@ -21,6 +21,13 @@ public:
       int8_t data_pins[8];
       uint16_t width;
       uint16_t height;
+      int8_t latch_delay=10;
+  };
+
+  enum class Quality {
+    QUALITY_HIGH,
+    QUALITY_NORMAL,
+    QUALITY_FAST
   };
 
 
@@ -30,6 +37,8 @@ public:
 
   void clear();
   void paint();
+
+  void setQuality(Quality quality);
 
   Config _config;
 

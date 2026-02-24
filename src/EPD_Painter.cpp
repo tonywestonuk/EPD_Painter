@@ -41,6 +41,7 @@ extern "C" uint32_t epd_painter_ink_off(
 extern "C" void epd_painter_interleaved_copy(
   const uint8_t *input, uint8_t *output,
   int16_t width, int16_t height, bool interlace_period);
+  
 
 #define PASS_COUNT 6
 
@@ -52,6 +53,21 @@ EPD_Painter::EPD_Painter(const Config &config)
   : GFXcanvas8(config.width, config.height, false) {
   
     _config = config;
+}
+
+void EPD_Painter::setQuality(Quality quality){
+      switch (quality) {
+        case Quality::QUALITY_HIGH:
+            _config.latch_delay=25;
+            break;
+        case Quality::QUALITY_NORMAL:
+            _config.latch_delay=10;
+            break;
+        case Quality::QUALITY_FAST:
+            _config.latch_delay=5;
+            // e.g. fewer passes, faster but ghostier
+            break;
+    }
 }
 
 // =============================================================================
@@ -72,7 +88,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
   } else {
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_le));
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_ckv));
-    delayMicroseconds(20);
+    delayMicroseconds(_config.latch_delay);
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_le));
   }
@@ -85,7 +101,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
     }
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_le));
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_ckv));
-    delayMicroseconds(5);
+    delayMicroseconds(_config.latch_delay);
     REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
     REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_le));
   }
