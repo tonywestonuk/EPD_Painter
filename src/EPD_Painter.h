@@ -10,27 +10,32 @@
 class EPD_Painter : public GFXcanvas8 {
 
 public:
-  EPD_Painter();
+  struct Config {
+      int8_t pin_pwr;
+      int8_t pin_sph;
+      int8_t pin_oe;
+      int8_t pin_cl;
+      int8_t pin_spv;
+      int8_t pin_ckv;
+      int8_t pin_le;
+      int8_t data_pins[8];
+      uint16_t width;
+      uint16_t height;
+  };
+
+
+  EPD_Painter(const Config &config);
   bool begin();
   bool end();
 
   void clear();
   void paint();
 
-  // Must be public for sendRow() REG_WRITE access
-  static constexpr int PIN_SPV = 17;
-  static constexpr int PIN_CKV = 18;
-  static constexpr int PIN_LE  = 15;
+  Config _config;
 
 private:
 
-  // ---- EPD control pins ----
-  static constexpr int PIN_PWR = 46;
-  static constexpr int PIN_SPH = 13;
-  static constexpr int PIN_OE  = 45;
-  static constexpr int PIN_CL  = 16;
 
-  static constexpr int DATA_PINS[8] = { 6, 14, 7, 12, 9, 11, 8, 10 };
 
   // ---- LCD_CAM / DMA ----
   gdma_channel_handle_t dma_chan = nullptr;
