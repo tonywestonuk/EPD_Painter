@@ -65,7 +65,6 @@ void EPD_Painter::setQuality(Quality quality){
             break;
         case Quality::QUALITY_FAST:
             _config.latch_delay=1;
-            // e.g. fewer passes, faster but ghostier
             break;
     }
 }
@@ -300,11 +299,14 @@ static const uint8_t darker_waveform[][6] = {
 // =============================================================================
 // paint()
 // =============================================================================
-void EPD_Painter::paint() {
+void EPD_Painter::paint(int passes) {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
-  epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+
+  for (int paint_pass=0; paint_pass<passes; paint_pass++) {
+      epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+
 
   epd_painter_ink_on(
     packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
@@ -335,6 +337,9 @@ void EPD_Painter::paint() {
     }
     delay(_config.latch_delay);
   }
+  interlace_period = !interlace_period;
+
+  }
 
   memset(dma_buffer1, 0x00, packed_row_bytes);
   memset(dma_buffer2, 0x00, packed_row_bytes);
@@ -342,7 +347,6 @@ void EPD_Painter::paint() {
     sendRow(row == 0, row == height() - 1);
   }
 
-  interlace_period = !interlace_period;
 }
 
 // =============================================================================

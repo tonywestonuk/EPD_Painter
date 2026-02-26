@@ -36,7 +36,7 @@ public:
   bool end();
 
   void clear();
-  void paint();
+  void paint(int passes=2);
 
   void setQuality(Quality quality);
 
