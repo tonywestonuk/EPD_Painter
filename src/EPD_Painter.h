@@ -21,7 +21,7 @@ public:
       int8_t data_pins[8];
       uint16_t width;
       uint16_t height;
-      int8_t latch_delay=10;
+      int8_t latch_delay=5;
   };
 
   enum class Quality {
@@ -63,11 +63,12 @@ private:
 
   int packed_row_bytes = 0;
   bool interlace_period = false;
+  bool shouldSkipRow = false;
 
   // ---- Internal helpers ----
   void powerOn();
   void powerOff();
-  void sendRow(bool firstLine, bool lastLine=false);
+  void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
 
   // ---- Power management ----
   class PanelPowerGuard {

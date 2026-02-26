@@ -215,12 +215,17 @@ epd_painter_convert_packed_fb_to_ink:
 
     // Loop: process 16 packed bytes (64 pixels) per iteration
     srli            a4, a4, 4           // a4 = number of 16-byte chunks
+
+    // Clear out something changed reg
+    movi            a15, 0
+
     loopnez         a4, .convert_end    // use zero-overhead loop
 
     ee.vld.128.ip   q0, a2, 16         // load 16 packed bytes (64 pixels)
 
     // Clear output accumulator for this 16-byte block
     ee.zero.q       q3
+ 
 
     // ----- Handle pixels with value 11 (both bits set) -----
     //
@@ -277,10 +282,21 @@ epd_painter_convert_packed_fb_to_ink:
     ee.andq         q2, q6, q1
     ee.orq          q3, q3, q2
 
+    // Did anything change?
+    EE.MOVI.32.A    q3, a14, 0
+    or              a15, a15, a14
+    EE.MOVI.32.A    q3, a14, 1
+    or              a15, a15, a14
+    EE.MOVI.32.A    q3, a14, 2
+    or              a15, a15, a14
+    EE.MOVI.32.A    q3, a14, 3
+    or              a15, a15, a14
+
     // Store the completed 16-byte ink output for this chunk
     ee.vst.128.ip   q3, a3, 16
 
 .convert_end:
+    mov             a2, a15   
     retw.n
 
 

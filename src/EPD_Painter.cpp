@@ -26,15 +26,15 @@ static const uint8_t kDataSignals[8] = {
 extern "C" void epd_painter_compact_pixels(
   const uint8_t *input, uint8_t *output, uint32_t size);
 
-extern "C" uint32_t epd_painter_convert_packed_fb_to_ink(
+extern "C" int epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
   const uint32_t *waveform);
 
-extern "C" uint32_t epd_painter_ink_on(
+extern "C" void epd_painter_ink_on(
   const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
   uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
 
-extern "C" uint32_t epd_painter_ink_off(
+extern "C" void epd_painter_ink_off(
   const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
   uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
 
@@ -58,13 +58,13 @@ EPD_Painter::EPD_Painter(const Config &config)
 void EPD_Painter::setQuality(Quality quality){
       switch (quality) {
         case Quality::QUALITY_HIGH:
-            _config.latch_delay=25;
+            _config.latch_delay=9;
             break;
         case Quality::QUALITY_NORMAL:
-            _config.latch_delay=10;
+            _config.latch_delay=4;
             break;
         case Quality::QUALITY_FAST:
-            _config.latch_delay=5;
+            _config.latch_delay=1;
             // e.g. fewer passes, faster but ghostier
             break;
     }
@@ -73,14 +73,14 @@ void EPD_Painter::setQuality(Quality quality){
 // =============================================================================
 // sendRow()
 // =============================================================================
-void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
+void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   dma_buffer = dma_buffer == dma_buffer1 ? dma_buffer2 : dma_buffer1;
 
   while (LCD_CAM.lcd_user.lcd_start) {
     yield();
   }
 
-    const uint32_t SPV = (1u << _config.pin_spv);
+  const uint32_t SPV = (1u << _config.pin_spv);
   const uint32_t CKV = (1u << _config.pin_ckv);
   const uint32_t LE  = (1u << _config.pin_le);
 
@@ -98,10 +98,14 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
   } else {
     REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
     REG_WRITE(GPIO_OUT_W1TS_REG, LE);
-    delayMicroseconds(_config.latch_delay);
+    delayMicroseconds(1);
     REG_WRITE(GPIO_OUT_W1TC_REG, LE);
     REG_WRITE(GPIO_OUT_W1TS_REG, CKV);
   }
+
+    //delayMicroseconds(20);
+
+  shouldSkipRow=skipRow;
 
   LCD_CAM.lcd_user.lcd_start = 1;
 
@@ -111,7 +115,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
     }
     REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
     REG_WRITE(GPIO_OUT_W1TS_REG, LE);
-    delayMicroseconds(_config.latch_delay);
+    delayMicroseconds(1);
     REG_WRITE(GPIO_OUT_W1TC_REG,LE);
     REG_WRITE(GPIO_OUT_W1TS_REG,CKV);
   }
@@ -300,9 +304,7 @@ void EPD_Painter::paint() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
-  int start = millis();
   epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
-  Serial.println(millis()-start);
 
   epd_painter_ink_on(
     packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
@@ -325,11 +327,13 @@ void EPD_Painter::paint() {
 
     for (int row = 0; row < height(); row++) {
       uint32_t waveform = (row % 2 == interlace_period) ? darker_fmt : lighter_fmt;
-      epd_painter_convert_packed_fb_to_ink(
+      int changed=epd_painter_convert_packed_fb_to_ink(
         packed_fastbuffer + row * packed_row_bytes,
         dma_buffer, packed_row_bytes, &waveform);
-      sendRow(row == 0);
+
+      sendRow(row == 0, false, changed==0);
     }
+    delay(_config.latch_delay);
   }
 
   memset(dma_buffer1, 0x00, packed_row_bytes);
@@ -367,6 +371,7 @@ void EPD_Painter::clear() {
         dma_buffer, packed_row_bytes, &lighter_fmt);
       sendRow(row == 0);
     }
+    delay(_config.latch_delay);
   }
 
   for (int phase = 0; phase < 2; phase++) {
@@ -378,6 +383,7 @@ void EPD_Painter::clear() {
       for (int row = 0; row < _config.height; ++row) {
         sendRow(row == 0);
       }
+      delay(_config.latch_delay);
     }
   }
 
