@@ -80,17 +80,27 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
     yield();
   }
 
+    const uint32_t SPV = (1u << _config.pin_spv);
+  const uint32_t CKV = (1u << _config.pin_ckv);
+  const uint32_t LE  = (1u << _config.pin_le);
+
   if (firstLine) {
-    REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_spv) | (1 << _config.pin_ckv));
+    // If first line, reset to top of page.
+
+    REG_WRITE(GPIO_OUT_W1TC_REG, SPV);
     delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_spv));
+    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
+    delayMicroseconds(1);
+    REG_WRITE(GPIO_OUT_W1TS_REG, CKV);
+    delayMicroseconds(1);
+    REG_WRITE(GPIO_OUT_W1TS_REG, SPV);
+
   } else {
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_le));
-    REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_ckv));
+    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
+    REG_WRITE(GPIO_OUT_W1TS_REG, LE);
     delayMicroseconds(_config.latch_delay);
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
-    REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_le));
+    REG_WRITE(GPIO_OUT_W1TC_REG, LE);
+    REG_WRITE(GPIO_OUT_W1TS_REG, CKV);
   }
 
   LCD_CAM.lcd_user.lcd_start = 1;
@@ -99,11 +109,11 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine) {
     while (LCD_CAM.lcd_user.lcd_start) {
       yield();
     }
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_le));
-    REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_ckv));
+    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
+    REG_WRITE(GPIO_OUT_W1TS_REG, LE);
     delayMicroseconds(_config.latch_delay);
-    REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
-    REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_le));
+    REG_WRITE(GPIO_OUT_W1TC_REG,LE);
+    REG_WRITE(GPIO_OUT_W1TS_REG,CKV);
   }
 }
 

@@ -2,9 +2,7 @@
 #include "EPD_Painter.h"
 #include "EPD_Painter_devices.h"
 
-EPD_Painter epd(epd_paper_dev_m5stacks3);
-
-
+EPD_Painter epd(EPD_PAPER_DEVICE::M5PAPER_S3);
 
 void setup() {
 if (!epd.begin()) {
