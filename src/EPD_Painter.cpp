@@ -300,8 +300,9 @@ void EPD_Painter::paint() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
-
+  int start = millis();
   epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+  Serial.println(millis()-start);
 
   epd_painter_ink_on(
     packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,

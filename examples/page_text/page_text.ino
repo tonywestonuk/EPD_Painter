@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include "EPD_Painter.h"
+#include "EPD_Painter_devices.h"
 
-EPD_Painter epd;
+EPD_Painter epd(EPD_PAPER_DEVICE::M5PAPER_S3);
 
 // Terminal configuration
 #define TERMINAL_FONT_SIZE  5
