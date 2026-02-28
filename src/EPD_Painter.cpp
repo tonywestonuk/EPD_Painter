@@ -1,3 +1,4 @@
+#include "Wire.h"
 #include "esp32-hal.h"
 #include "esp_timer.h"
 #include "Adafruit_GFX.h"
@@ -9,6 +10,7 @@
 #include <hal/dma_types.h>
 #include <hal/gpio_hal.h>
 #include <soc/lcd_cam_struct.h>
+#include <epd_painter_powerctl.h>
 
 // LCD_CAM signal indices for the 8 parallel data lines
 static const uint8_t kDataSignals[8] = {
@@ -21,6 +23,9 @@ static const uint8_t kDataSignals[8] = {
   LCD_DATA_OUT6_IDX,
   LCD_DATA_OUT7_IDX,
 };
+
+epd_painter_powerctl* powerctl = nullptr;
+TwoWire* _wire = nullptr;
 
 // Assembly routines — see EPD_Painter.S for full documentation
 extern "C" void epd_painter_compact_pixels(
@@ -41,6 +46,23 @@ extern "C" void epd_painter_ink_off(
 extern "C" void epd_painter_interleaved_copy(
   const uint8_t *input, uint8_t *output,
   int16_t width, int16_t height, bool interlace_period);
+
+static inline void gpio_set_fast(uint8_t pin) {
+  if (pin < 32) {
+    REG_WRITE(GPIO_OUT_W1TS_REG, 1UL << pin);
+  } else {
+    REG_WRITE(GPIO_OUT1_W1TS_REG, 1UL << (pin - 32));
+  }
+}
+
+static inline void gpio_clear_fast(uint8_t pin) {
+  if (pin < 32) {
+    REG_WRITE(GPIO_OUT_W1TC_REG, 1UL << pin);
+  } else {
+    REG_WRITE(GPIO_OUT1_W1TC_REG, 1UL << (pin - 32));
+  }
+}
+
   
 
 #define PASS_COUNT 6
@@ -73,38 +95,33 @@ void EPD_Painter::setQuality(Quality quality){
 // sendRow()
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
-  dma_buffer = dma_buffer == dma_buffer1 ? dma_buffer2 : dma_buffer1;
+  dma_buffer = (dma_buffer == dma_buffer1) ? dma_buffer2 : dma_buffer1;
 
   while (LCD_CAM.lcd_user.lcd_start) {
     yield();
   }
 
-  const uint32_t SPV = (1u << _config.pin_spv);
-  const uint32_t CKV = (1u << _config.pin_ckv);
-  const uint32_t LE  = (1u << _config.pin_le);
-
   if (firstLine) {
-    // If first line, reset to top of page.
+    // Reset to top of page
+    gpio_clear_fast(_config.pin_spv);
+    delayMicroseconds(1);
 
-    REG_WRITE(GPIO_OUT_W1TC_REG, SPV);
+    gpio_clear_fast(_config.pin_ckv);
     delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
-    delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TS_REG, CKV);
-    delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TS_REG, SPV);
 
+    gpio_set_fast(_config.pin_ckv);
+    delayMicroseconds(1);
+
+    gpio_set_fast(_config.pin_spv);
   } else {
-    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
-    REG_WRITE(GPIO_OUT_W1TS_REG, LE);
+    gpio_clear_fast(_config.pin_ckv);
+    gpio_set_fast(_config.pin_le);
     delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TC_REG, LE);
-    REG_WRITE(GPIO_OUT_W1TS_REG, CKV);
+    gpio_clear_fast(_config.pin_le);
+    gpio_set_fast(_config.pin_ckv);
   }
 
-    //delayMicroseconds(20);
-
-  shouldSkipRow=skipRow;
+  shouldSkipRow = skipRow;
 
   LCD_CAM.lcd_user.lcd_start = 1;
 
@@ -112,11 +129,12 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     while (LCD_CAM.lcd_user.lcd_start) {
       yield();
     }
-    REG_WRITE(GPIO_OUT_W1TC_REG, CKV);
-    REG_WRITE(GPIO_OUT_W1TS_REG, LE);
+
+    gpio_clear_fast(_config.pin_ckv);
+    gpio_set_fast(_config.pin_le);
     delayMicroseconds(1);
-    REG_WRITE(GPIO_OUT_W1TC_REG,LE);
-    REG_WRITE(GPIO_OUT_W1TS_REG,CKV);
+    gpio_clear_fast(_config.pin_le);
+    gpio_set_fast(_config.pin_ckv);
   }
 }
 
@@ -129,6 +147,18 @@ bool EPD_Painter::begin() {
   uint32_t bytes = (uint32_t)_config.width * (uint32_t)_config.height;
   buffer = (uint8_t *)heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM);
   if (buffer) memset(buffer, 0, bytes);
+
+
+  // -- Start I2C if needed.
+  if (_config.i2c.scl!=-1 && _config.i2c.wire==nullptr){
+    Serial.println("starting I2C");
+    _wire = new TwoWire(0);
+
+    _wire->begin(_config.i2c.sda, _config.i2c.scl, _config.i2c.freq);
+    _config.i2c.wire = _wire;
+    delay(50);
+  }
+  Serial.println("...done");
   
 
   // ---- Configure EPD control pins ----
@@ -140,6 +170,7 @@ bool EPD_Painter::begin() {
   pinMode(_config.pin_le,  OUTPUT);
   pinMode(_config.pin_cl,  OUTPUT);
 
+
   packed_row_bytes = _config.width / 4;
 
   // ---- Enable and reset LCD_CAM peripheral ----
@@ -150,7 +181,7 @@ bool EPD_Painter::begin() {
 
   // ---- Configure LCD_CAM pixel clock ----
   LCD_CAM.lcd_clock.clk_en = 1;
-  LCD_CAM.lcd_clock.lcd_clk_sel = 3;
+  LCD_CAM.lcd_clock.lcd_clk_sel = 2;
   LCD_CAM.lcd_clock.lcd_ck_out_edge = 0;
   LCD_CAM.lcd_clock.lcd_ck_idle_edge = 0;
   LCD_CAM.lcd_clock.lcd_clk_equ_sysclk = 0;
@@ -242,6 +273,18 @@ bool EPD_Painter::begin() {
   memset(packed_screenbuffer, 0x00, packed_size);
   memset(getBuffer(), 0x00, _config.width * _config.height);
 
+    // ── If a tps chip is used, initalise PowerCtl Init ──
+  if (_config.power.tps_addr!=-1){
+    Serial.println("\n── PowerCtl Init ──");
+    powerctl = new epd_painter_powerctl();
+    if (!powerctl->begin(_config)) {
+      Serial.println("FATAL: powerctl init failed!");
+      while (1) delay(1000);
+    }
+  }
+
+
+
   return (dma_buffer && packed_fastbuffer && packed_screenbuffer);
 }
 
@@ -264,21 +307,34 @@ bool EPD_Painter::end() {
 void EPD_Painter::powerOn() {
   digitalWrite(_config.pin_spv, LOW);
   digitalWrite(_config.pin_sph, LOW);
-  digitalWrite(_config.pin_oe,  HIGH);
-  delayMicroseconds(100);
-  digitalWrite(_config.pin_pwr, HIGH);
-  delayMicroseconds(100);
 
-  REG_WRITE(GPIO_OUT_W1TC_REG, (1 << _config.pin_spv) | (1 << _config.pin_ckv));
+  if (powerctl) {
+    powerctl->powerOn();
+  } else {
+    digitalWrite(_config.pin_oe,  HIGH);
+    delayMicroseconds(100);
+    digitalWrite(_config.pin_pwr, HIGH);
+    delayMicroseconds(100);
+  }
+
+
+  gpio_clear_fast(_config.pin_spv);
+  gpio_clear_fast(_config.pin_ckv);
   delayMicroseconds(1);
-  REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_ckv));
-  REG_WRITE(GPIO_OUT_W1TS_REG, (1 << _config.pin_spv));
+
+  gpio_set_fast(_config.pin_ckv);
+  gpio_set_fast(_config.pin_spv);
 }
 
 void EPD_Painter::powerOff() {
-  digitalWrite(_config.pin_pwr, LOW);
-  delayMicroseconds(100);
-  digitalWrite(_config.pin_oe,  LOW);
+  if (powerctl) {
+    powerctl->powerOn();
+  } else {
+    digitalWrite(_config.pin_oe,  LOW);
+    delayMicroseconds(100);
+    digitalWrite(_config.pin_pwr, LOW);
+    delayMicroseconds(100);
+  }
 }
 
 // =============================================================================

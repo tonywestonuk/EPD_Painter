@@ -1,3 +1,4 @@
+#include "Wire.h"
 #ifndef EPD_Painter_H
 #define EPD_Painter_H
 
@@ -10,7 +11,22 @@
 class EPD_Painter : public GFXcanvas8 {
 
 public:
+
+struct I2CBusConfig {
+    TwoWire* wire = nullptr;
+    int sda = -1;
+    int scl = -1;
+    uint32_t freq = 100000;
+};
+struct PowerCtlConfig {
+    int pca_addr=-1;
+    int tps_addr=-1;
+    int vcom_mv=-1;
+};
+
   struct Config {
+      uint16_t width;
+      uint16_t height;
       int8_t pin_pwr;
       int8_t pin_sph;
       int8_t pin_oe;
@@ -18,11 +34,12 @@ public:
       int8_t pin_spv;
       int8_t pin_ckv;
       int8_t pin_le;
+      int8_t latch_delay;
       int8_t data_pins[8];
-      uint16_t width;
-      uint16_t height;
-      int8_t latch_delay=5;
+      I2CBusConfig i2c{};
+      PowerCtlConfig power{};
   };
+
 
   enum class Quality {
     QUALITY_HIGH,
