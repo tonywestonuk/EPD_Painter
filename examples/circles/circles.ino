@@ -2,7 +2,9 @@
 #include "EPD_Painter.h"
 #include "EPD_Painter_devices.h"
 
-EPD_Painter epd(EPD_PAPER_DEVICE::M5PAPER_S3);
+// Pick one.
+//EPD_Painter epd(EPD_PAPER_DEVICE::M5STACK_PAPERS3);
+EPD_Painter epd(EPD_PAPER_DEVICE::LILYGO_T5_S3_GPS);
 
 void setup() {
 if (!epd.begin()) {

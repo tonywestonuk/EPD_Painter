@@ -5,7 +5,7 @@
 
 namespace EPD_PAPER_DEVICE {
 
-    static EPD_Painter::Config M5PAPER_S3 = {
+    static EPD_Painter::Config M5STACK_PAPERS3 = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = 46,

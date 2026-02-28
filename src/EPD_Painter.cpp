@@ -11,6 +11,7 @@
 #include <hal/gpio_hal.h>
 #include <soc/lcd_cam_struct.h>
 #include <epd_painter_powerctl.h>
+#include <EPD_Painter_devices.h>
 
 // LCD_CAM signal indices for the 8 parallel data lines
 static const uint8_t kDataSignals[8] = {
@@ -47,6 +48,11 @@ extern "C" void epd_painter_interleaved_copy(
   const uint8_t *input, uint8_t *output,
   int16_t width, int16_t height, bool interlace_period);
 
+static inline void epd_gpio_func_sel(int pin) {
+  esp_rom_gpio_pad_select_gpio((gpio_num_t)pin);
+
+}
+
 static inline void gpio_set_fast(uint8_t pin) {
   if (pin < 32) {
     REG_WRITE(GPIO_OUT_W1TS_REG, 1UL << pin);
@@ -63,19 +69,30 @@ static inline void gpio_clear_fast(uint8_t pin) {
   }
 }
 
-  
-
 #define PASS_COUNT 6
 
 // =============================================================================
 // Constructor — dimensions come from config defaults until begin() is called.
 // We construct GFXcanvas8 with 0,0 and resize in begin() once we have config.
 // =============================================================================
+
+
+
 EPD_Painter::EPD_Painter(const Config &config)
   : GFXcanvas8(config.width, config.height, false) {
   
     _config = config;
 }
+
+EPD_Painter::EPD_Painter()
+#if defined(ARDUINO_M5STACK_PAPERS3)
+    : EPD_Painter(EPD_PAPER_DEVICE::M5STACK_PAPERS3)
+#else
+    : EPD_Painter(EPD_PAPER_DEVICE::LILYGO_T5_S3_GPS)
+#endif
+{}
+
+
 
 void EPD_Painter::setQuality(Quality quality){
       switch (quality) {
@@ -151,14 +168,11 @@ bool EPD_Painter::begin() {
 
   // -- Start I2C if needed.
   if (_config.i2c.scl!=-1 && _config.i2c.wire==nullptr){
-    Serial.println("starting I2C");
     _wire = new TwoWire(0);
-
     _wire->begin(_config.i2c.sda, _config.i2c.scl, _config.i2c.freq);
     _config.i2c.wire = _wire;
     delay(50);
   }
-  Serial.println("...done");
   
 
   // ---- Configure EPD control pins ----
@@ -210,13 +224,13 @@ bool EPD_Painter::begin() {
   for (int i = 0; i < 8; i++) {
     int8_t pin = _config.data_pins[i];
     esp_rom_gpio_connect_out_signal(pin, kDataSignals[i], false, false);
-    gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[pin], PIN_FUNC_GPIO);
+    epd_gpio_func_sel(GPIO_PIN_MUX_REG[pin]);
     gpio_set_drive_capability((gpio_num_t)pin, (gpio_drive_cap_t)3);
   }
 
   // ---- Route pixel clock to CL pin ----
   esp_rom_gpio_connect_out_signal(_config.pin_cl, LCD_PCLK_IDX, false, false);
-  gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[_config.pin_cl], PIN_FUNC_GPIO);
+  epd_gpio_func_sel(GPIO_PIN_MUX_REG[_config.pin_cl]);
   gpio_set_drive_capability((gpio_num_t)_config.pin_cl, (gpio_drive_cap_t)3);
 
   // ---- Allocate GDMA channel ----
@@ -439,7 +453,7 @@ void EPD_Painter::clear() {
     memset(dma_buffer1, pattern, packed_row_bytes);
     memset(dma_buffer2, pattern, packed_row_bytes);
 
-    for (int passes = 0; passes < 4; passes++) {
+    for (int passes = 0; passes < 8; passes++) {
       for (int row = 0; row < _config.height; ++row) {
         sendRow(row == 0);
       }
