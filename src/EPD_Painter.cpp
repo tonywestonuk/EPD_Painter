@@ -69,7 +69,7 @@ static inline void gpio_clear_fast(uint8_t pin) {
   }
 }
 
-#define PASS_COUNT 6
+#define PASS_COUNT 7
 
 // =============================================================================
 // Constructor — dimensions come from config defaults until begin() is called.
@@ -91,7 +91,6 @@ EPD_Painter::EPD_Painter()
     : EPD_Painter(EPD_PAPER_DEVICE::LILYGO_T5_S3_GPS)
 #endif
 {}
-
 
 
 void EPD_Painter::setQuality(Quality quality){
@@ -354,22 +353,23 @@ void EPD_Painter::powerOff() {
 // =============================================================================
 // Waveform tables
 // =============================================================================
-static const uint8_t lighter_waveform[][6] = {
-  { 1, 2, 2, 2, 3, 0 },
-  { 1, 2, 2, 2, 3, 2 },
-  { 2, 2, 2, 2, 2, 2 }
+static const uint8_t lighter_waveform[][PASS_COUNT] = {
+  { 1, 2, 2, 0, 2, 0, 2 },
+  { 2, 2, 2, 2, 2, 3, 3 },
+  { 2, 2, 2, 2, 2, 2, 2 }
 };
 
-static const uint8_t darker_waveform[][6] = {
-  { 1, 1, 0, 0, 0, 0 },
-  { 1, 1, 1, 0, 0, 0 },
-  { 1, 1, 1, 1, 1, 1 }
+static const uint8_t darker_waveform[][PASS_COUNT] = {
+  { 1, 3, 3, 3, 1, 3,1 },
+  { 1, 1, 3, 1, 1, 3,1 },
+  { 1, 1, 1, 1, 1, 1,1 }
 };
 
 // =============================================================================
 // paint()
 // =============================================================================
 void EPD_Painter::paint(int passes) {
+
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 

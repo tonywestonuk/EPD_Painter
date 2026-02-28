@@ -35,7 +35,7 @@ namespace EPD_PAPER_DEVICE {
         .power = {
             .pca_addr = 0x20,
             .tps_addr = 0x68,
-            .vcom_mv = -1400
+            .vcom_mv = -500
         }
     };
 

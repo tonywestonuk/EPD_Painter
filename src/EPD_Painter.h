@@ -7,7 +7,6 @@
 #include <esp_private/gdma.h>
 #include <hal/dma_types.h>
 
-
 class EPD_Painter : public GFXcanvas8 {
 
 public:
@@ -47,6 +46,7 @@ struct PowerCtlConfig {
     QUALITY_FAST
   };
 
+  Config _config;
 
   EPD_Painter(const Config &config);
   EPD_Painter();
@@ -58,7 +58,10 @@ struct PowerCtlConfig {
 
   void setQuality(Quality quality);
 
-  Config _config;
+  Config getConfig(){
+    return _config;
+  }
+
 
 private:
 

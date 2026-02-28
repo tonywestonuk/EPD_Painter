@@ -13,7 +13,7 @@ public:
   bool begin(EPD_Painter::Config config);
 
   // Main power sequencing
-  bool powerOn(int vcom_mv = -1400);
+  bool powerOn();
   void powerOff();
 
   // Diagnostics

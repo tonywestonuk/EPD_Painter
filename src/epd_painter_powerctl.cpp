@@ -1,15 +1,10 @@
 #include "epd_painter_powerctl.h"
 
 epd_painter_powerctl::epd_painter_powerctl() {
-    Serial.println("Starting Constr");
-
-
   _pca_out[0] = 0x00;
   _pca_out[1] = 0x00;
   _pca_cfg[0] = 0xFF;
   _pca_cfg[1] = 0xFF;
-
-  Serial.println("owsfdsq");
 }
 
 bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
@@ -36,7 +31,7 @@ bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
   return true;
 }
 
-bool epd_painter_powerctl::powerOn(int vcom_mv) {
+bool epd_painter_powerctl::powerOn() {
   Serial.println("[PWRCTL] Power-on sequence...");
 
   // 1. OE on, MODE on
@@ -79,7 +74,7 @@ bool epd_painter_powerctl::powerOn(int vcom_mv) {
   if (!tpsWrite(TPS_ENABLE, 0x3F)) return false;
 
   // 7. Set VCOM
-  setVcomMv(vcom_mv);
+  setVcomMv(config.power.vcom_mv);
 
   // 8. Wait for TPS power good bits
   Serial.print("[PWRCTL] Waiting for TPS PG...");
@@ -100,6 +95,7 @@ bool epd_painter_powerctl::powerOn(int vcom_mv) {
 
   return ((pg & 0xFA) == 0xFA);
 }
+
 
 void epd_painter_powerctl::powerOff() {
   Serial.println("[PWRCTL] Power-off...");
@@ -134,8 +130,6 @@ uint8_t epd_painter_powerctl::readPcaPort(uint8_t port) {
 }
 
 void epd_painter_powerctl::setVcomMv(int vcom_mv) {
-  // TPS encoding used in your original code:
-  // -1600mV -> 160 -> 0x00A0 written as little-endian to VCOM1/VCOM2
   int mag = abs(vcom_mv) / 10;
   uint8_t lo = static_cast<uint8_t>(mag & 0xFF);
   uint8_t hi = static_cast<uint8_t>((mag >> 8) & 0xFF);
