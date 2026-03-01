@@ -3,9 +3,8 @@
 
 #include "EPD_Painter.h"
 
-namespace EPD_PAPER_DEVICE {
-
-    static EPD_Painter::Config M5STACK_PAPERS3 = {
+#if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = 46,
@@ -18,7 +17,8 @@ namespace EPD_PAPER_DEVICE {
         .data_pins = { 6, 14, 7, 12, 9, 11, 8, 10 }
     };
 
-    static EPD_Painter::Config LILYGO_T5_S3_GPS = {
+#elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_sph  = 41,
@@ -35,10 +35,13 @@ namespace EPD_PAPER_DEVICE {
         .power = {
             .pca_addr = 0x20,
             .tps_addr = 0x68,
-            .vcom_mv = -500
+            .vcom_mv = -1400
         }
     };
 
-}
+#else
+#error "No EPD_Painter device selected."
+#endif
+
 
 #endif

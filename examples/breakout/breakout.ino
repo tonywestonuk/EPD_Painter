@@ -1,12 +1,22 @@
+
+// Pick a board...
+//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#define EPD_PAINTER_PRESET_M5PAPER_S3
+
 #include <Arduino.h>
 #include "EPD_Painter.h"
-#include "EPD_Painter_devices.h"
+#include "EPD_Painter_presets.h"
 
 #define XPOWERS_CHIP_BQ25896
 #include <XPowersLib.h>
 
-EPD_Painter epd(EPD_PAPER_DEVICE::LILYGO_T5_S3_GPS);
+EPD_Painter epd(EPD_PAINTER_PRESET);
+
+
+// Power off only works with LILYGO T5
+#ifdef EPD_PAINTER_DEVICE_LILYGO_T5_S3_GPS
 XPowersPPM PPM;
+#endif
 
 // --- Game constants ---
 #define BALL_SIZE    25
@@ -144,18 +154,21 @@ void setup() {
     while (1);
   }
 
-  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
   epd.clear();
   epd.clear();
 
   const auto& cfg = epd.getConfig();
-  bool result = PPM.init(*cfg.i2c.wire, cfg.i2c.sda, cfg.i2c.scl, BQ25896_SLAVE_ADDRESS);
-  if (!result) {
-    while (1) {
-      Serial.println("PPM is not online...");
-      delay(1000);
-    }
-  }
+
+#ifdef EPD_PAINTER_DEVICE_LILYGO_T5_S3_GPS
+ bool result = PPM.init(*cfg.i2c.wire, cfg.i2c.sda, cfg.i2c.scl, BQ25896_SLAVE_ADDRESS);
+ if (!result) {
+   while (1) {
+     Serial.println("PPM is not online...");
+     delay(1000);
+   }
+ }
+ #endif
 
   pinMode(0, INPUT);
   initGame();
@@ -189,9 +202,11 @@ void loop() {
 
   epd.paint(1);
 
+#ifdef EPD_PAINTER_DEVICE_LILYGO_T5_S3_GPS
   if (digitalRead(0) == 0) {
-    epd.clear();
-    epd.clear();
-    PPM.shutdown();
-  }
+   epd.clear();
+   epd.clear();
+   PPM.shutdown();
+ }
+#endif
 }

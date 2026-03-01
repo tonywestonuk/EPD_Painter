@@ -11,7 +11,6 @@
 #include <hal/gpio_hal.h>
 #include <soc/lcd_cam_struct.h>
 #include <epd_painter_powerctl.h>
-#include <EPD_Painter_devices.h>
 
 // LCD_CAM signal indices for the 8 parallel data lines
 static const uint8_t kDataSignals[8] = {
@@ -80,17 +79,8 @@ static inline void gpio_clear_fast(uint8_t pin) {
 
 EPD_Painter::EPD_Painter(const Config &config)
   : GFXcanvas8(config.width, config.height, false) {
-  
     _config = config;
 }
-
-EPD_Painter::EPD_Painter()
-#if defined(ARDUINO_M5STACK_PAPERS3)
-    : EPD_Painter(EPD_PAPER_DEVICE::M5STACK_PAPERS3)
-#else
-    : EPD_Painter(EPD_PAPER_DEVICE::LILYGO_T5_S3_GPS)
-#endif
-{}
 
 
 void EPD_Painter::setQuality(Quality quality){

@@ -49,7 +49,6 @@ struct PowerCtlConfig {
   Config _config;
 
   EPD_Painter(const Config &config);
-  EPD_Painter();
   bool begin();
   bool end();
 
