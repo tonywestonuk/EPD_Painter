@@ -70,20 +70,20 @@ epd_painter_compact_pixels:
 
     // Build the 2-LSB mask: store 0x03 to stack then broadcast to all
     // 16 bytes of q5, giving q5 = [03 03 03 03 ... 03]
-    movi            a10, 0b00000011
+    movi            a10, 0b00001111
     s32i            a10, a1, 0
     ee.vldbc.8      q5, a1
 
     // Configure the hardware shift registers used by ee.src.q and ee.vsl.32:
     //   SAR_BYTE = 1  → ee.src.q shifts by 1 byte at a time
-    //   SAR      = 2  → ee.vsl.32 shifts left by 2 bits within each 32-bit lane
+    //   SAR      = 4  → ee.vsl.32 shifts left by 4 bits within each 32-bit lane
     movi            a10, 1
     wur.sar_byte    a10
-    movi            a10, 2
+    movi            a10, 4
     wsr.sar         a10
 
     // -------------------------------------------------------------------------
-    // Main loop: 16 input bytes → 4 packed output bytes
+    // Main loop: 16 input bytes → 8 packed output bytes
     // -------------------------------------------------------------------------
     mov             a11, a4             // a11 = total pixel count, counts down
 
@@ -92,21 +92,8 @@ epd_painter_compact_pixels:
     // Load 16 pixels from input (1 byte each) into q0, advance a2 by 16
     ee.vld.128.ip   q0, a2, 16
 
-    // Mask off upper 6 bits of each byte — keep only the 2 pixel bits.
-    // q0 = [00PP 00PP 00PP ... 00PP]  (16 bytes)
+    // Mask off upper 4 bits of each byte — keep only the 4 pixel bits.
     ee.andq         q0, q0, q5
-
-    // Now pack 4 pixels into each output byte using a series of
-    // shift-and-OR operations. Each step moves the next pixel's bits
-    // into position alongside the previous ones.
-    //
-    // ee.src.q shifts the 128-bit register right by SAR_BYTE (1 byte),
-    // filling from q7 (zeros) on the left. Combined with ee.vsl.32
-    // (left shift by SAR=2 bits within each 32-bit lane), this slides
-    // the accumulated pixel bits left to make room for the next pixel.
-    //
-    // After 3 iterations, each 32-bit lane holds 4 packed pixels in
-    // its most significant byte: [P3P2P1P0 xx xx xx]
 
     // Step 1: shift q0 right by 1 byte into q1, shift q0 left by 2 bits,
     // then OR together — merges pixels 0 and 1 within each lane
@@ -114,26 +101,11 @@ epd_painter_compact_pixels:
     ee.vsl.32       q0, q0             // q0 <<= 2 bits (per 32-bit lane)
     ee.orq          q0, q0, q1         // q0 |= q1 → pixels 0+1 combined
 
-    // Step 2: merge pixel 2
-    ee.vsl.32       q0, q0             // shift accumulated bits left 2 more
-    ee.src.q        q1, q1, q7         // shift q1 another byte right
-    ee.orq          q0, q0, q1         // merge → pixels 0+1+2 combined
-
-    // Step 3: merge pixel 3
-    ee.vsl.32       q0, q0             // shift left 2 more
-    ee.src.q        q1, q1, q7         // shift q1 another byte right
-    ee.orq          q0, q0, q1         // merge → all 4 pixels combined per lane
-
-    // At this point each 32-bit lane of q0 has 4 packed pixels in its
-    // top byte, with garbage in the lower bytes. The two ee.vunzip.8
-    // calls reorganise the register so that all 4 useful bytes end up
-    // contiguous at the bottom of q0, ready for a 32-bit store.
-    ee.vunzip.8     q0, q1
     ee.vunzip.8     q0, q1
 
     // Store the 4 packed output bytes, then advance output pointer by 4
     ee.stxq.32      q0, q7, a3, 0, 0
-    addi            a3, a3, 4
+    addi            a3, a3, 8
 
     // Decrement pixel counter by 16 and loop if more pixels remain
     addi            a11, a11, -16
@@ -303,42 +275,18 @@ epd_painter_convert_packed_fb_to_ink:
 // =============================================================================
 // epd_painter_ink_on
 //
-// Determines which pixels need to TURN ON (become grey/black) and records
-// them in both the output buffer and the screen buffer.
-//
-// A pixel is eligible to turn on only if it is currently WHITE (00) in
-// the screen buffer — the EPD cannot directly transition between two
-// non-white shades. If the screen buffer already shows a grey or black
-// pixel there, it must be cleared to white first (via ink_off) before
-// ink_on can set it to the desired shade.
-//
-// For eligible pixels (screen buffer = 00), the new pixel value from
-// packed_fastbuffer is copied to the output and written into the screen
-// buffer so future calls know the pixel is no longer white.
-//
-// Operates on interleaved rows: processes every other row (even or odd
-// depending on interlace_period), skipping the alternate row each time.
-// This matches the interlaced waveform drive used in paint().
+]
 //
 // Parameters:
-//   a2 - packed_fastbuffer (new desired pixel values, 2bpp packed)
-//   a3 - packed_screenbuffer (current physical display state, read+write)
+//   a2 - packed_thisbuffer (new desired pixel values, 4bpp packed)
+//   a3 - packed_lastbuffer (current physical display)
 //   a4 - Output pointer (pixels to drive in this pass)
 //   a5 - Width in bytes (packed bytes per row = display_width / 4)
 //   a6 - Height in rows
 //   a7 - Interlace period: 0 = start on even rows, non-zero = start on odd
 //
 // Registers used:
-//   a10 - Scratch
-//   a11 - Byte counter within a row (counts down in steps of 16)
-//   q0  - Mask: identifies pixels where screen_buffer is non-zero (occupied)
-//   q1  - Temporary / shifted copy
-//   q2  - Data loaded from packed_fastbuffer (desired new pixels)
-//   q3  - Data loaded from packed_screenbuffer (current screen state)
-//   q4  - Output: masked new pixel data to drive
-//   q5  - Mask 0xAA = 10101010 (isolates HIGH bit of each 2bpp pixel)
-//   q6  - Mask 0x55 = 01010101 (isolates LOW bit of each 2bpp pixel)
-//   q7  - Zero (unused directly but initialised)
+
 // =============================================================================
     .global epd_painter_ink_on
     .type   epd_painter_ink_on, @function
@@ -348,39 +296,60 @@ epd_painter_convert_packed_fb_to_ink:
 epd_painter_ink_on:
     entry           a1, 32
 
-    // SAR = 1: shifts used below are 1 bit within each 32-bit lane
-    movi            a10, 1
-    wsr.sar         a10
-
-    // Build q6 = 0x55 (01010101) and q5 = 0xAA (10101010)
-    movi            a10, 0b01010101
+    movi            a10, 0b10000000
     s32i            a10, a1, 0
-    ee.vldbc.8      q6, a1             // q6 = 0x55 = low-bit mask per pixel
-    ee.vsl.32       q5, q6             // q5 = 0xAA = high-bit mask per pixel
+    ee.vldbc.8      q7, a1
 
-    ee.zero.q       q7
-    mov             a11, a5            // a11 = row width in bytes
-
-    // If interlace_period is non-zero, skip the first row so we start
-    // on odd rows instead of even rows
-    beqz            a7, .ink_on_loop
-    add             a2, a2, a5
-    add             a3, a3, a5
-    add             a4, a4, a5
+    movi            a10, 0b00001000
+    s32i            a10, a1, 0
+    ee.vldbc.8      q6, a1
+   
 
 .ink_on_loop:
 
-    // Load 16 bytes from the new framebuffer and screen buffer (no advance on a3 yet)
+    // Load 16 bytes from tt framebuffer and screen buffer (no advance on a3 yet)
     ee.vld.128.ip   q2, a2, 16         // q2 = desired new pixels
-    ee.vld.128.ip   q3, a3, 0          // q3 = current screen state (read without advancing)
+    ee.vld.128.ip   q3, a3, 16         // q3 = current screen state (read without advancing)
 
-    // Build a mask identifying pixels where the screen buffer is NOT 00
-    // (i.e. pixels that are already grey or black — cannot be overwritten).
+
+    // Must do these things
+    //.  - Create a bitmask of all 0000 pixels 
+
+    //.   0000 0000 1111 0000 0000 0100
+    //.   0000 0010 1110 0011 0011 1001
     //
-    // Strategy: spread each pixel's bits so that if EITHER bit is set,
-    // BOTH bits become set. Then invert → we get 11 only where both bits
-    // were originally 00 (i.e. the pixel is white and available).
+    
+    // Create bitmask of pixels that are currently 0000. These are the only pixels that can be updated
+    ee.zero.q       q5                  // zero q5
+    ee.andq         q0, q3, q7          // get top 4 bits into q0
+    EE.VCMP.EQ.S8   q0, q0, q5          // q0 bits are 11 if top 4 are zero, otherwise 0
 
+
+    // need to somehow pack this into 2 bits.
+    // 2 bytes of 4 bits per pixel, need to go into 1 byte of 2 bits per pixel.
+    // Turn top nibble to 2 bits, store in top left
+    movi            a10, 0b00000011
+    s32i            a10, a1, 0
+    ee.vldbc.8      q5, a1
+
+    movi            a10, 0b00000100
+    s32i            a10, a1, 0
+    ee.vldbc.8      q6, a1
+
+    ee.andq         q0, q2, q5   
+    EE.VMUL.U8           
+    
+
+
+    
+
+
+
+
+
+
+
+//////. BELOW IS OLD SHIT
     // Spread low bit → high: shift left 1, mask to high-bit positions, OR back
     ee.vsl.32       q1, q3             // q1 = q3 << 1
     ee.andq         q1, q1, q5         // keep only high-bit positions (0xAA mask)

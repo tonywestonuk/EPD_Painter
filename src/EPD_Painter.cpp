@@ -265,16 +265,15 @@ bool EPD_Painter::begin() {
   gdma_start(dma_chan, (intptr_t)&dma_desc1);
 
   // ---- Allocate packed 2bpp framebuffers ----
-  const size_t packed_size = (_config.width * _config.height) / 4;
+  const size_t packed_size = (_config.width * _config.height) / 2;
 
-  packed_fastbuffer = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
-
-  packed_screenbuffer = static_cast<uint8_t *>(
+  packed_thisbuffer = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+  packed_lastbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
-  memset(packed_screenbuffer, 0x00, packed_size);
-  memset(getBuffer(), 0x00, _config.width * _config.height);
+  // memset(packed_screenbuffer, 0x00, packed_size);
+  // memset(getBuffer(), 0x00, _config.width * _config.height);
 
     // ── If a tps chip is used, initalise PowerCtl Init ──
   if (_config.power.tps_addr!=-1){
@@ -288,7 +287,7 @@ bool EPD_Painter::begin() {
 
 
 
-  return (dma_buffer && packed_fastbuffer && packed_screenbuffer);
+  return (dma_buffer && packed_thisbuffer && packed_lastbuffer);
 }
 
 // =============================================================================
@@ -353,6 +352,7 @@ static const uint8_t darker_waveform[][PASS_COUNT] = {
   { 1, 3, 3, 3, 1, 3,1 },
   { 1, 1, 3, 1, 1, 3,1 },
   { 1, 1, 1, 1, 1, 1,1 }
+
 };
 
 // =============================================================================
@@ -361,51 +361,62 @@ static const uint8_t darker_waveform[][PASS_COUNT] = {
 void EPD_Painter::paint(int passes) {
 
   PanelPowerGuard guard(*this);
-  const int packed_row_bytes = width() / 4;
+  const int packed_row_bytes = width() / 2;
+
+  memset(buffer,0x00, packed_row_bytes*height());
+
+  buffer[0] = 1;
+  buffer[1] = 2;
+  buffer[2] = 3;
+  buffer[3] = 4;
+  
+
+  epd_painter_compact_pixels(buffer, packed_thisbuffer, width()*height());
 
 
-  for (int paint_pass=0; paint_pass<passes; paint_pass++) {
-      epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+  //ink on... 
+  //  IF thisbuffer pixel is not the same as lastbuffer
+  //. AND last buffer  4 bit pixel is 0
+  //. Then output is value of lastbuffer high pixels.
 
+  // epd_painter_ink_on(
+  //   packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  //   packed_row_bytes, height(), interlace_period);
 
-  epd_painter_ink_on(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), interlace_period);
+  // epd_painter_ink_off(
+  //   packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  //   packed_row_bytes, height(), !interlace_period);
 
-  epd_painter_ink_off(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), !interlace_period);
+  // for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
+  //   const uint32_t lighter_fmt =
+  //     ((lighter_waveform[0][pass] << 16) +
+  //      (lighter_waveform[1][pass] << 8)  +
+  //       lighter_waveform[2][pass]) * 0x55;
 
-  for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
-    const uint32_t lighter_fmt =
-      ((lighter_waveform[0][pass] << 16) +
-       (lighter_waveform[1][pass] << 8)  +
-        lighter_waveform[2][pass]) * 0x55;
+  //   const uint32_t darker_fmt =
+  //     ((darker_waveform[0][pass] << 16) +
+  //      (darker_waveform[1][pass] << 8)  +
+  //       darker_waveform[2][pass]) * 0x55;
 
-    const uint32_t darker_fmt =
-      ((darker_waveform[0][pass] << 16) +
-       (darker_waveform[1][pass] << 8)  +
-        darker_waveform[2][pass]) * 0x55;
+  //   for (int row = 0; row < height(); row++) {
+  //     uint32_t waveform = (row % 2 == interlace_period) ? darker_fmt : lighter_fmt;
+  //     int changed=epd_painter_convert_packed_fb_to_ink(
+  //       packed_fastbuffer + row * packed_row_bytes,
+  //       dma_buffer, packed_row_bytes, &waveform);
 
-    for (int row = 0; row < height(); row++) {
-      uint32_t waveform = (row % 2 == interlace_period) ? darker_fmt : lighter_fmt;
-      int changed=epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &waveform);
+  //     sendRow(row == 0, false, changed==0);
+  //   }
+  //   delay(_config.latch_delay);
+  // }
+  // interlace_period = !interlace_period;
 
-      sendRow(row == 0, false, changed==0);
-    }
-    delay(_config.latch_delay);
-  }
-  interlace_period = !interlace_period;
+  // }
 
-  }
-
-  memset(dma_buffer1, 0x00, packed_row_bytes);
-  memset(dma_buffer2, 0x00, packed_row_bytes);
-  for (int row = 0; row < height(); ++row) {
-    sendRow(row == 0, row == height() - 1);
-  }
+  // memset(dma_buffer1, 0x00, packed_row_bytes);
+  // memset(dma_buffer2, 0x00, packed_row_bytes);
+  // for (int row = 0; row < height(); ++row) {
+  //   sendRow(row == 0, row == height() - 1);
+  // }
 
 }
 
@@ -416,12 +427,12 @@ void EPD_Painter::clear() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
-  memset(packed_fastbuffer, 0x00, height() * packed_row_bytes);
+  //memset(packed_fastbuffer, 0x00, height() * packed_row_bytes);
 
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), true);
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), false);
+  // epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  //                     packed_row_bytes, height(), true);
+  // epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  //                     packed_row_bytes, height(), false);
 
   for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
     const uint32_t lighter_fmt =
@@ -429,12 +440,12 @@ void EPD_Painter::clear() {
        (lighter_waveform[1][pass] << 8)  +
         lighter_waveform[2][pass]) * 0x55;
 
-    for (int row = 0; row < height(); row++) {
-      epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &lighter_fmt);
-      sendRow(row == 0);
-    }
+    // for (int row = 0; row < height(); row++) {
+    //   epd_painter_convert_packed_fb_to_ink(
+    //     packed_fastbuffer + row * packed_row_bytes,
+    //     dma_buffer, packed_row_bytes, &lighter_fmt);
+    //   sendRow(row == 0);
+    // }
     delay(_config.latch_delay);
   }
 

@@ -76,8 +76,8 @@ private:
   uint8_t* dma_buffer1       = nullptr;  //  Row Double buffer A
   uint8_t* dma_buffer2       = nullptr;  //. Row Double buffer B
 
-  uint8_t* packed_fastbuffer  = nullptr;  // 2bpp current frame  (internal RAM)
-  uint8_t* packed_screenbuffer = nullptr; // 2bpp previous frame (PSRAM)
+  uint8_t* packed_lastbuffer  = nullptr;  // 2bpp current frame  (internal RAM)
+  uint8_t* packed_thisbuffer = nullptr; // 2bpp previous frame (PSRAM)
 
   
 
