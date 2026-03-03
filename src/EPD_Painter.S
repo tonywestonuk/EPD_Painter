@@ -146,43 +146,34 @@ epd_painter_compact_pixels:
 // =============================================================================
 // epd_painter_convert_packed_fb_to_ink
 //
-// Converts one row of the packed 2bpp framebuffer into the "ink" drive
-// format expected by the EPD panel's data lines for one waveform pass.
+// Converts packed 2bpp framebuffer into "ink" drive format for one
+// waveform pass. Only processes 64-pixel chunks whose corresponding
+// bit is set in the chunk_flags parameter.
 //
-// Each 2bpp pixel value (00, 01, 10, 11) is mapped to a 2-bit drive
-// pattern taken from the waveform table. The waveform defines whether
-// each pixel should be driven positively, negatively, or left floating
-// during this particular pass. This is how greyscale is achieved — the
-// ratio of positive to negative drives across 6 passes determines the
-// final shade.
-//
-// The waveform parameter points to 3 consecutive bytes:
-//   Byte 0: drive pattern for pixels that are 11 (black / darkest)
-//   Byte 1: drive pattern for pixels that are 10 (dark grey)
-//   Byte 2: drive pattern for pixels that are 01 (light grey)
-//   (pixels that are 00 = white are not driven)
-//
-// Each waveform byte is broadcast to all 16 positions in a Q register,
-// then masked against the pixels that match that value.
-//
-// Processes 16 packed bytes (= 64 pixels) per loop iteration.
+// When writing output, existing non-zero data in the output buffer is
+// preserved — only pixels that are currently 00 in the output are written.
+// This allows two calls (one for lighten waveforms, one for darken) to
+// accumulate into the same output buffer without overwriting each other.
 //
 // Parameters:
 //   a2 - Input pointer  (packed 2bpp framebuffer row)
-//   a3 - Output pointer (ink drive data for this pass)
+//   a3 - Output pointer (ink drive data — may contain data from prior call)
 //   a4 - Length in bytes (packed row size, multiple of 16)
-//   a5 - Pointer to 3-byte waveform entry for this row/pass
+//   a5 - Pointer to 3-byte waveform entry for this pass
+//   a6 - chunk_flags (1 bit per 64-pixel chunk, MSB = first chunk;
+//         bit=1 means process this chunk, bit=0 means skip)
 //
 // Registers used:
 //   a7  - Constant 1 (for SAR shift amount)
+//   a9  - Scratch for flag testing
 //   a10 - Scratch
-//   q0  - Input pixel data (loaded from packed framebuffer)
+//   q0  - Input pixel data / existing output for merge
 //   q1  - Intermediate / pixel sub-masks
 //   q2  - Shifted copy for mask spreading
-//   q3  - Output accumulator (OR of all waveform contributions)
-//   q4  - Waveform for pixel value 11 (broadcast to all bytes)
-//   q5  - Waveform for pixel value 10 (broadcast to all bytes)
-//   q6  - Waveform for pixel value 01 (broadcast to all bytes)
+//   q3  - Waveform output for this chunk
+//   q4  - Waveform for pixel value 11 (broadcast)
+//   q5  - Waveform for pixel value 10 (broadcast)
+//   q6  - Waveform for pixel value 01 (broadcast)
 //   q7  - Mask: 0x55 = 01010101 (isolates low bit of each 2bpp pixel)
 // =============================================================================
     .global epd_painter_convert_packed_fb_to_ink
@@ -192,111 +183,96 @@ epd_painter_compact_pixels:
 epd_painter_convert_packed_fb_to_ink:
     entry           a1, 32
 
-    // SAR = 1: ee.vsr.32 / ee.vsl.32 shift by 1 bit within each 32-bit lane.
-    // Used below to spread each pixel's low bit into the high bit position
-    // (and vice versa) so we can build a full 2-bit mask from a single bit.
     movi            a7, 1
     wsr.sar         a7
 
-    // Build 0x55 mask (01010101) broadcast to all bytes of q7.
-    // This isolates the LOW bit of each 2bpp pixel pair in a packed byte.
+    // Build 0x55 mask broadcast to all bytes of q7
     movi            a10, 0b01010101
     s32i            a10, a1, 0
     ee.vldbc.8      q7, a1
 
-    // Load the 3 waveform bytes and broadcast each to a full Q register.
-    // a5 advances by 1 byte each time (.ip = increment pointer).
-    //   q4 = waveform for 11 pixels, broadcast to all 16 bytes
-    //   q5 = waveform for 10 pixels, broadcast to all 16 bytes
-    //   q6 = waveform for 01 pixels, broadcast to all 16 bytes
-    ee.vldbc.8.ip   q4, a5, 1
-    ee.vldbc.8.ip   q5, a5, 1
-    ee.vldbc.8.ip   q6, a5, 1
+    // Load and broadcast the 3 waveform bytes
+    ee.vldbc.8.ip   q4, a5, 1          // waveform for 11 pixels
+    ee.vldbc.8.ip   q5, a5, 1          // waveform for 10 pixels
+    ee.vldbc.8.ip   q6, a5, 1          // waveform for 01 pixels
 
-    // Loop: process 16 packed bytes (64 pixels) per iteration
-    srli            a4, a4, 4           // a4 = number of 16-byte chunks
+.convert_loop:
 
-    // Clear out something changed reg
-    movi            a15, 0
+    // --- Check flag for this 64-pixel chunk ---
+    extui           a9, a6, 31, 1
+    slli            a6, a6, 1
 
-    loopnez         a4, .convert_end    // use zero-overhead loop
+    beqz            a9, .convert_skip
 
-    ee.vld.128.ip   q0, a2, 16         // load 16 packed bytes (64 pixels)
+    // --- Process this chunk ---
+    ee.vld.128.ip   q0, a2, 16
 
-    // Clear output accumulator for this 16-byte block
     ee.zero.q       q3
- 
 
     // ----- Handle pixels with value 11 (both bits set) -----
-    //
-    // A pixel is 11 if its LOW bit is 1 AND its HIGH bit is 1.
-    // Strategy: shift q0 right by 1 bit to align the high bit with
-    // the low bit position, AND with the original to confirm both are set,
-    // then spread back to fill both bit positions of the 2bpp slot.
-    //
-    ee.vsr.32       q1, q0             // q1 = q0 >> 1 (high bit → low position)
-    ee.andq         q1, q1, q7         // keep only low-bit positions → 1 where high bit was 1
-    ee.andq         q1, q0, q1         // AND with q0 low bits → 1 only where BOTH bits are 1
-                                        // q1 now has 1 in the low-bit position for each 11 pixel
-    ee.vsl.32       q2, q1             // q2 = q1 << 1 → high-bit position for same pixels
-    ee.orq          q1, q1, q2         // q1 = full 11 mask: both bits set for every 11 pixel
+    ee.vsr.32       q1, q0
+    ee.andq         q1, q1, q7
+    ee.andq         q1, q0, q1
+    ee.vsl.32       q2, q1
+    ee.orq          q1, q1, q2
 
-    // Stamp the waveform for 11 pixels onto the output:
-    // q4 (broadcast waveform byte) ANDed with q1 (mask) gives the
-    // drive pattern only where pixels are 11. OR into q3.
     ee.andq         q2, q4, q1
     ee.orq          q3, q3, q2
 
-    // ----- Handle pixels with value 10 (high bit set, low bit clear) -----
-    //
-    // Remove the 11 pixels we already handled by XORing them out of q0,
-    // leaving only 01 and 10 pixels. Then isolate the 10s.
-    //
-    ee.xorq         q0, q0, q1         // clear 11 pixels from q0; remaining = 01 and 10 pixels
+    // ----- Handle pixels with value 10 -----
+    ee.xorq         q0, q0, q1
 
-    // q7 = 0x55 = 01010101. NOT(q7) = 0xAA = 10101010 → masks the HIGH bit of each 2bpp pixel.
-    ee.notq         q7, q7             // q7 = 0xAA (temporarily)
-    ee.andq         q1, q0, q7         // q1 = high bits only (10 pixels have high=1, low=0)
+    ee.notq         q7, q7             // q7 = 0xAA temporarily
+    ee.andq         q1, q0, q7
     ee.notq         q7, q7             // restore q7 = 0x55
 
-    // Spread the high bit down into the low bit position so both bits of
-    // the 2bpp slot are filled (turns 10 into 11 within the mask):
-    ee.vsr.32       q2, q1             // q2 = q1 >> 1 → high bit into low position
-    ee.orq          q1, q1, q2         // q1 = full mask for 10 pixels (both bits set)
+    ee.vsr.32       q2, q1
+    ee.orq          q1, q1, q2
 
-    // Stamp waveform for 10 pixels:
     ee.andq         q2, q5, q1
     ee.orq          q3, q3, q2
 
-    // ----- Handle pixels with value 01 (low bit set, high bit clear) -----
-    //
-    // After removing 11 pixels above, q0 contains only 01 and 10 pixels.
-    // The 10 pixels have already been handled; now isolate the 01s.
-    // 01 pixels: low bit = 1, high bit = 0. Use 0x55 mask to get low bits.
-    //
-    ee.andq         q1, q0, q7         // q1 = low bits of remaining pixels → 1 for 01 pixels
-    ee.vsl.32       q2, q1             // q2 = q1 << 1 → spread up into high bit position
-    ee.orq          q1, q1, q2         // q1 = full mask for 01 pixels (both bits set)
+    // ----- Handle pixels with value 01 -----
+    ee.andq         q1, q0, q7
+    ee.vsl.32       q2, q1
+    ee.orq          q1, q1, q2
 
-    // Stamp waveform for 01 pixels:
     ee.andq         q2, q6, q1
     ee.orq          q3, q3, q2
 
-    // Did anything change?
-    EE.MOVI.32.A    q3, a14, 0
-    or              a15, a15, a14
-    EE.MOVI.32.A    q3, a14, 1
-    or              a15, a15, a14
-    EE.MOVI.32.A    q3, a14, 2
-    or              a15, a15, a14
-    EE.MOVI.32.A    q3, a14, 3
-    or              a15, a15, a14
+    // --- Merge into output buffer without overwriting existing data ---
+    ee.vld.128.ip   q0, a3, 0          // q0 = existing output (don't advance yet)
 
-    // Store the completed 16-byte ink output for this chunk
+    // Build mask of occupied slots in existing output
+    ee.vsl.32       q1, q0
+    ee.notq         q7, q7             // q7 = 0xAA temporarily
+    ee.andq         q1, q1, q7
+    ee.notq         q7, q7             // restore q7 = 0x55
+    ee.orq          q1, q0, q1
+
+    ee.vsr.32       q2, q1
+    ee.andq         q2, q2, q7
+    ee.orq          q1, q1, q2
+
+    // Invert: 11 where output slot is free (00)
+    ee.notq         q1, q1
+
+    // Mask new waveform data to free slots only, merge, store
+    ee.andq         q3, q3, q1
+    ee.orq          q3, q3, q0
     ee.vst.128.ip   q3, a3, 16
 
-.convert_end:
-    mov             a2, a15   
+    j               .convert_next
+
+.convert_skip:
+    // Skip: advance pointers without processing
+    addi            a2, a2, 16
+    addi            a3, a3, 16
+
+.convert_next:
+    addi            a4, a4, -16
+    bnez            a4, .convert_loop
+
     retw.n
 
 
@@ -307,40 +283,35 @@ epd_painter_convert_packed_fb_to_ink:
 // them in both the output buffer and the screen buffer.
 //
 // A pixel is eligible to turn on only if it is currently WHITE (00) in
-// the screen buffer — the EPD cannot directly transition between two
-// non-white shades. If the screen buffer already shows a grey or black
-// pixel there, it must be cleared to white first (via ink_off) before
-// ink_on can set it to the desired shade.
-//
-// For eligible pixels (screen buffer = 00), the new pixel value from
+// the screen buffer. For eligible pixels, the new pixel value from
 // packed_fastbuffer is copied to the output and written into the screen
 // buffer so future calls know the pixel is no longer white.
 //
-// Operates on interleaved rows: processes every other row (even or odd
-// depending on interlace_period), skipping the alternate row each time.
-// This matches the interlaced waveform drive used in paint().
+// Returns a 32-bit flag word: one bit per 64-pixel (16-byte) chunk,
+// set to 1 if any non-zero pixel was written to output for that chunk.
+// The first chunk processed corresponds to the MSB of the returned word.
 //
 // Parameters:
 //   a2 - packed_fastbuffer (new desired pixel values, 2bpp packed)
 //   a3 - packed_screenbuffer (current physical display state, read+write)
 //   a4 - Output pointer (pixels to drive in this pass)
-//   a5 - Width in bytes (packed bytes per row = display_width / 4)
-//   a6 - Height in rows
-//   a7 - Interlace period: 0 = start on even rows, non-zero = start on odd
+//   a5 - Length in bytes (total packed bytes to process, must be multiple of 16)
+//
+// Returns:
+//   a2 - 32-bit flag register (1 bit per 64-pixel chunk, MSB = first chunk)
 //
 // Registers used:
 //   a10 - Scratch
-//   a11 - Byte counter within a row (counts down in steps of 16)
-//   q0  - Mask: identifies pixels where screen_buffer is non-zero (occupied)
+//   a11 - Accumulated flag register
+//   q0  - Mask: identifies writable (white) pixels
 //   q1  - Temporary / shifted copy
 //   q2  - Data loaded from packed_fastbuffer (desired new pixels)
 //   q3  - Data loaded from packed_screenbuffer (current screen state)
 //   q4  - Output: masked new pixel data to drive
 //   q5  - Mask 0xAA = 10101010 (isolates HIGH bit of each 2bpp pixel)
 //   q6  - Mask 0x55 = 01010101 (isolates LOW bit of each 2bpp pixel)
-//   q7  - Zero (unused directly but initialised)
 // =============================================================================
-    .global epd_painter_ink_on
+.global epd_painter_ink_on
     .type   epd_painter_ink_on, @function
     .text
     .align 4
@@ -348,118 +319,108 @@ epd_painter_convert_packed_fb_to_ink:
 epd_painter_ink_on:
     entry           a1, 32
 
-    // SAR = 1: shifts used below are 1 bit within each 32-bit lane
     movi            a10, 1
     wsr.sar         a10
 
     // Build q6 = 0x55 (01010101) and q5 = 0xAA (10101010)
     movi            a10, 0b01010101
     s32i            a10, a1, 0
-    ee.vldbc.8      q6, a1             // q6 = 0x55 = low-bit mask per pixel
-    ee.vsl.32       q5, q6             // q5 = 0xAA = high-bit mask per pixel
+    ee.vldbc.8      q6, a1
+    ee.vsl.32       q5, q6
 
-    ee.zero.q       q7
-    mov             a11, a5            // a11 = row width in bytes
+    // Clear flag accumulator
+    movi            a11, 0
 
-    // If interlace_period is non-zero, skip the first row so we start
-    // on odd rows instead of even rows
-    beqz            a7, .ink_on_loop
-    add             a2, a2, a5
-    add             a3, a3, a5
-    add             a4, a4, a5
+    // a7 = number of chunks (for final shift)
+    srli            a7, a5, 4
 
 .ink_on_loop:
 
-    // Load 16 bytes from the new framebuffer and screen buffer (no advance on a3 yet)
-    ee.vld.128.ip   q2, a2, 16         // q2 = desired new pixels
-    ee.vld.128.ip   q3, a3, 0          // q3 = current screen state (read without advancing)
+    ee.vld.128.ip   q2, a2, 16
+    ee.vld.128.ip   q3, a3, 0
 
-    // Build a mask identifying pixels where the screen buffer is NOT 00
-    // (i.e. pixels that are already grey or black — cannot be overwritten).
-    //
-    // Strategy: spread each pixel's bits so that if EITHER bit is set,
-    // BOTH bits become set. Then invert → we get 11 only where both bits
-    // were originally 00 (i.e. the pixel is white and available).
+    // Build mask: spread each pixel's bits so any non-zero pixel gets both bits set
+    ee.vsl.32       q1, q3
+    ee.andq         q1, q1, q5
+    ee.orq          q0, q3, q1
 
-    // Spread low bit → high: shift left 1, mask to high-bit positions, OR back
-    ee.vsl.32       q1, q3             // q1 = q3 << 1
-    ee.andq         q1, q1, q5         // keep only high-bit positions (0xAA mask)
-    ee.orq          q0, q3, q1         // q0 = q3 with low bit spread to high position
+    ee.vsr.32       q1, q0
+    ee.andq         q1, q1, q6
+    ee.orq          q0, q0, q1
 
-    // Spread high bit → low: shift right 1, mask to low-bit positions, OR back
-    ee.vsr.32       q1, q0             // q1 = q0 >> 1
-    ee.andq         q1, q1, q6         // keep only low-bit positions (0x55 mask)
-    ee.orq          q0, q0, q1         // q0 = both bits set for any non-zero pixel
-
-    // Invert: q0 now has 11 only where the original screen pixel was 00 (white)
-    // These are the pixels we are allowed to write
+    // Invert: 11 only where original pixel was 00 (white/writable)
     ee.notq         q0, q0
 
-    // Copy the new pixel values, but only for allowed (white) pixels
-    ee.andq         q4, q2, q0         // q4 = new pixels masked to writable positions only
+    // Mask new pixels to writable positions only
+    ee.andq         q4, q2, q0
 
     // Write drive data to output
     ee.vst.128.ip   q4, a4, 16
 
-    // Update screen buffer: OR in the newly written pixels so future calls
-    // know these positions are no longer white
+    // Update screen buffer with newly written pixels
     ee.orq          q3, q3, q4
-    ee.vst.128.ip   q3, a3, 16         // write updated screen buffer, advance pointer
+    ee.vst.128.ip   q3, a3, 16
 
-    // Process remaining bytes in this row
-    addi            a11, a11, -16
-    bnez            a11, .ink_on_loop
+    // --- Build flag bit for this 64-pixel chunk ---
+    slli            a11, a11, 1
 
-    // End of row: skip the NEXT row (interlacing — we only drive every other row)
-    mov             a11, a5             // reset byte counter for next active row
-    add             a2, a2, a5          // skip one row in source
-    add             a3, a3, a5          // skip one row in screen buffer
-    add             a4, a4, a5          // skip one row in output
+    ee.vst.128.ip   q4, a1, 0
+    l32i            a10, a1, 0
+    l32i            a9, a1, 4
+    or              a10, a10, a9
+    l32i            a9, a1, 8
+    or              a10, a10, a9
+    l32i            a9, a1, 12
+    or              a10, a10, a9
 
-    addi            a6, a6, -2          // we consumed 2 rows (1 active + 1 skipped)
-    bnez            a6, .ink_on_loop
+    beqz            a10, .ink_on_no_flag
+    addi            a11, a11, 1
+.ink_on_no_flag:
 
+    addi            a5, a5, -16
+    bnez            a5, .ink_on_loop
+
+    // Shift flags so first chunk aligns to bit 31
+    // Currently flags occupy the lowest `num_chunks` bits.
+    // We need to shift left by (32 - num_chunks).
+    movi            a10, 32
+    sub             a10, a10, a7        // a10 = 32 - num_chunks
+    ssl             a10                 // set shift amount for SLL
+    sll             a11, a11            // shift left by (32 - num_chunks)
+
+    mov             a2, a11
     retw.n
-
 
 // =============================================================================
 // epd_painter_ink_off
 //
-// Determines which pixels need to TURN OFF (return to white, 00) and
-// drives them in the output, clearing them from the screen buffer.
+// Determines which pixels need to TURN OFF (be cleared back to white) and
+// records them in both the output buffer and the screen buffer.
 //
-// A pixel needs turning off when the screen buffer shows a non-white value
-// but the new desired framebuffer value differs from what's on screen.
-// Since the EPD cannot jump directly between grey shades, any pixel that
-// needs to change shade must pass through white first — ink_off clears it,
-// and a subsequent ink_on call will set it to the new shade.
+// A pixel needs clearing if the desired framebuffer differs from the current
+// screen state — it must pass through white before ink_on can set a new value.
 //
-// For each pixel where screen_buffer != packed_fastbuffer (they differ),
-// the current screen_buffer value is written to the output (to drive the
-// pixel back toward white), and that pixel is cleared in the screen buffer.
-//
-// Also operates on interleaved rows (same interlacing scheme as ink_on,
-// but called with the opposite interlace_period so together they cover
-// all rows).
+// Chunks where ink_on already drove pixels (indicated by the skip_flags
+// parameter) are skipped entirely — their pointers are advanced but no
+// processing is done.
 //
 // Parameters:
-//   a2 - packed_fastbuffer (new desired pixel values, used to detect changes)
+//   a2 - packed_fastbuffer (new desired pixel values, 2bpp packed)
 //   a3 - packed_screenbuffer (current physical display state, read+write)
 //   a4 - Output pointer (pixels to drive in this pass)
-//   a5 - Width in bytes (packed bytes per row = display_width / 4)
-//   a6 - Height in rows
-//   a7 - Interlace period: 0 = start on even rows, non-zero = start on odd
+//   a5 - Length in bytes (total packed bytes to process, must be multiple of 16)
+//   a6 - skip_flags (1 bit per 64-pixel chunk, MSB = first chunk;
+//         bit=1 means ink_on drove that chunk, so skip it here)
 //
 // Registers used:
+//   a9  - Scratch for flag testing
 //   a10 - Scratch
-//   a11 - Byte counter within a row
-//   q0  - Mask: identifies pixels that differ between framebuffer and screen
-//   q1  - Output data / temporary
-//   q2  - Data from packed_fastbuffer (desired new pixels)
-//   q3  - Data from packed_screenbuffer (current screen state)
-//   q5  - Mask 0xAA = 10101010
-//   q6  - Mask 0x55 = 01010101
-//   q7  - Zero (initialised, not used directly)
+//   q0  - Mask: identifies changed pixels
+//   q1  - Temporary / shifted copy
+//   q2  - Data loaded from packed_fastbuffer (desired new pixels)
+//   q3  - Data loaded from packed_screenbuffer (current screen state)
+//   q5  - Mask 0xAA = 10101010 (isolates HIGH bit of each 2bpp pixel)
+//   q6  - Mask 0x55 = 01010101 (isolates LOW bit of each 2bpp pixel)
 // =============================================================================
     .global epd_painter_ink_off
     .type   epd_painter_ink_off, @function
@@ -469,75 +430,67 @@ epd_painter_ink_on:
 epd_painter_ink_off:
     entry           a1, 32
 
-    // SAR = 1: 1-bit shift within each 32-bit lane
     movi            a10, 1
     wsr.sar         a10
 
-    // Build q6 = 0x55, q5 = 0xAA
+    // Build q6 = 0x55 (01010101) and q5 = 0xAA (10101010)
     movi            a10, 0b01010101
     s32i            a10, a1, 0
     ee.vldbc.8      q6, a1
     ee.vsl.32       q5, q6
 
-    ee.zero.q       q7
-    mov             a11, a5
-
-    // If interlace_period is non-zero, skip the first row (start on odd rows)
-    beqz            a7, .ink_off_loop
-    add             a2, a2, a5
-    add             a3, a3, a5
-    add             a4, a4, a5
-
 .ink_off_loop:
 
+    // --- Check skip flag for this 64-pixel chunk ---
+    // Test the MSB of a6; if set, ink_on already handled this chunk
+    extui           a9, a6, 31, 1
+    slli            a6, a6, 1
+
+    bnez            a9, .ink_off_skip
+
+    // --- Process this chunk ---
     ee.vld.128.ip   q2, a2, 16         // q2 = desired new pixels
     ee.vld.128.ip   q3, a3, 0          // q3 = current screen state
 
-    // Detect changed pixels: XOR gives 1 in any bit position that differs.
-    // A pixel needs to be cleared if the framebuffer differs from the screen —
-    // whether it changed shade or changed to white, it must go through white.
-    ee.xorq         q0, q2, q3         // q0 = bits that differ between desired and screen
+    // Detect changed pixels: XOR gives 1 in any bit position that differs
+    ee.xorq         q0, q2, q3
 
-    // Spread the difference across both bits of each 2bpp pixel slot,
-    // so that if EITHER bit changed, BOTH bits of the slot are flagged.
-    // This ensures we operate on whole pixels, not individual bits.
+    // Spread the difference across both bits of each 2bpp pixel slot
 
-    // Spread low bit → high
+    // Spread low bit -> high
     ee.vsl.32       q1, q0
-    ee.andq         q1, q1, q5         // keep high-bit positions only
-    ee.orq          q0, q0, q1         // q0: high bit set for any changed pixel
+    ee.andq         q1, q1, q5
+    ee.orq          q0, q0, q1
 
-    // Spread high bit → low
+    // Spread high bit -> low
     ee.vsr.32       q1, q0
-    ee.andq         q1, q1, q6         // keep low-bit positions only
-    ee.orq          q0, q0, q1         // q0: both bits set for any changed pixel
+    ee.andq         q1, q1, q6
+    ee.orq          q0, q0, q1
 
-    // Write the screen buffer value to output, but only for changed pixels.
-    // This drives the pixel back toward white using whatever value it currently has.
+    // Write screen buffer value to output for changed pixels only
+    // (drives pixel back toward white)
     ee.andq         q1, q3, q0
     ee.vst.128.ip   q1, a4, 16
 
-    // Clear the changed pixels from the screen buffer (mark them as white/00)
-    // so ink_on can set them to the new value on the next frame.
-    ee.notq         q0, q0             // invert mask: 1 = pixels to KEEP in screen buffer
-    ee.andq         q3, q3, q0         // clear changed pixels from screen buffer
-    ee.vst.128.ip   q3, a3, 16         // write updated screen buffer
+    // Clear changed pixels from screen buffer (mark as white/00)
+    ee.notq         q0, q0
+    ee.andq         q3, q3, q0
+    ee.vst.128.ip   q3, a3, 16
 
-    // Process remaining bytes in this row
-    addi            a11, a11, -16
-    bnez            a11, .ink_off_loop
+    j               .ink_off_next
 
-    // Skip the next (inactive) row — interlacing
-    mov             a11, a5
-    add             a2, a2, a5
-    add             a3, a3, a5
-    add             a4, a4, a5
+.ink_off_skip:
+    // Skip this chunk: advance all pointers without processing
+    addi            a2, a2, 16
+    addi            a3, a3, 16
+    addi            a4, a4, 16
 
-    addi            a6, a6, -2
-    bnez            a6, .ink_off_loop
+.ink_off_next:
+    // Loop until all bytes processed
+    addi            a5, a5, -16
+    bnez            a5, .ink_off_loop
 
     retw.n
-
 
 // =============================================================================
 // epd_painter_interleaved_copy
@@ -558,6 +511,7 @@ epd_painter_ink_off:
 // =============================================================================
     .global epd_painter_interleaved_copy
     .type   epd_painter_interleaved_copy, @function
+    .align 4
 
 epd_painter_interleaved_copy:
     entry           a1, 32

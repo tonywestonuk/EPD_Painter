@@ -31,17 +31,17 @@ TwoWire* _wire = nullptr;
 extern "C" void epd_painter_compact_pixels(
   const uint8_t *input, uint8_t *output, uint32_t size);
 
-extern "C" int epd_painter_convert_packed_fb_to_ink(
-  const uint8_t *packed_fb, uint8_t *output, uint32_t length,
-  const uint32_t *waveform);
-
-extern "C" void epd_painter_ink_on(
-  const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
-  uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
+extern "C" uint32_t epd_painter_ink_on(
+  const uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer,
+  uint8_t *output, uint32_t length);
 
 extern "C" void epd_painter_ink_off(
-  const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
-  uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
+  const uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer,
+  uint8_t *output, uint32_t length, uint32_t skip_flags);
+
+extern "C" void epd_painter_convert_packed_fb_to_ink(
+  const uint8_t *packed_fb, uint8_t *output, uint32_t length,
+  const uint8_t *waveform, uint32_t chunk_flags);
 
 extern "C" void epd_painter_interleaved_copy(
   const uint8_t *input, uint8_t *output,
@@ -268,7 +268,9 @@ bool EPD_Painter::begin() {
   const size_t packed_size = (_config.width * _config.height) / 4;
 
   packed_fastbuffer = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
+    heap_caps_aligned_alloc(16, _config.width/4, MALLOC_CAP_INTERNAL));
+  packed_output = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(16, _config.width/4, MALLOC_CAP_INTERNAL));
 
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
@@ -355,59 +357,79 @@ static const uint8_t darker_waveform[][PASS_COUNT] = {
   { 1, 1, 1, 1, 1, 1,1 }
 };
 
-// =============================================================================
-// paint()
-// =============================================================================
 void EPD_Painter::paint(int passes) {
 
   PanelPowerGuard guard(*this);
+
+  
   const int packed_row_bytes = width() / 4;
+  const int num_chunks = packed_row_bytes / 16;
+  const uint32_t chunk_mask = num_chunks >= 32
+      ? 0xFFFFFFFFu
+      : ((1u << num_chunks) - 1) << (32 - num_chunks);
+
+  for (int row = 0; row < height(); row++) {
+    epd_painter_compact_pixels(
+        buffer + row * width(), packed_fastbuffer, width());
+
+    uint32_t ink_flags = epd_painter_ink_on(
+        packed_fastbuffer,
+        packed_screenbuffer + row * packed_row_bytes,
+        packed_output, packed_row_bytes);
+
+    epd_painter_ink_off(
+        packed_fastbuffer,
+        packed_screenbuffer + row * packed_row_bytes,
+        packed_output, packed_row_bytes, ink_flags);
+
+    for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
+      const uint8_t lighter_wf[3] = {
+          lighter_waveform[0][pass],
+          lighter_waveform[1][pass],
+          lighter_waveform[2][pass]
+      };
+
+      const uint8_t darker_wf[3] = {
+          darker_waveform[0][pass],
+          darker_waveform[1][pass],
+          darker_waveform[2][pass]
+      };
+
+      memset(dma_buffer, 0, packed_row_bytes);
+
+      // ink_flags bits are set where ink_on wrote data (pixels turning on)
+      // → those chunks need the DARKER waveform
+
+      memset(packed_output, 0xff, packed_row_bytes);
+      ink_flags=0xffffffff;
 
 
-  for (int paint_pass=0; paint_pass<passes; paint_pass++) {
-      epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+      epd_painter_convert_packed_fb_to_ink(
+          packed_output, dma_buffer, packed_row_bytes,
+          darker_wf, ink_flags);
+
+      memset(dma_buffer, 0b01010101, packed_row_bytes);
 
 
-  epd_painter_ink_on(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), interlace_period);
+      // Inverted flags (masked!) select chunks where ink_off wrote data
+      // (pixels turning off) → those need the LIGHTER waveform
+    //  epd_painter_convert_packed_fb_to_ink(
+    //      packed_output, dma_buffer, packed_row_bytes,
+    //      lighter_wf, ~ink_flags);
 
-  epd_painter_ink_off(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), !interlace_period);
-
-  for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
-    const uint32_t lighter_fmt =
-      ((lighter_waveform[0][pass] << 16) +
-       (lighter_waveform[1][pass] << 8)  +
-        lighter_waveform[2][pass]) * 0x55;
-
-    const uint32_t darker_fmt =
-      ((darker_waveform[0][pass] << 16) +
-       (darker_waveform[1][pass] << 8)  +
-        darker_waveform[2][pass]) * 0x55;
-
-    for (int row = 0; row < height(); row++) {
-      uint32_t waveform = (row % 2 == interlace_period) ? darker_fmt : lighter_fmt;
-      int changed=epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &waveform);
-
-      sendRow(row == 0, false, changed==0);
+      sendRow(row == 0, false, false);
     }
-    delay(_config.latch_delay);
-  }
-  interlace_period = !interlace_period;
-
   }
 
   memset(dma_buffer1, 0x00, packed_row_bytes);
   memset(dma_buffer2, 0x00, packed_row_bytes);
   for (int row = 0; row < height(); ++row) {
-    sendRow(row == 0, row == height() - 1);
+    sendRow(row == 0, row == height() - 1, true);
   }
-
 }
+
+
+
 
 // =============================================================================
 // clear()
@@ -416,40 +438,7 @@ void EPD_Painter::clear() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
-  memset(packed_fastbuffer, 0x00, height() * packed_row_bytes);
 
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), true);
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), false);
-
-  for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
-    const uint32_t lighter_fmt =
-      ((lighter_waveform[0][pass] << 16) +
-       (lighter_waveform[1][pass] << 8)  +
-        lighter_waveform[2][pass]) * 0x55;
-
-    for (int row = 0; row < height(); row++) {
-      epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &lighter_fmt);
-      sendRow(row == 0);
-    }
-    delay(_config.latch_delay);
-  }
-
-  for (int phase = 0; phase < 2; phase++) {
-    uint8_t pattern = (phase % 2 == 0) ? 0b01010101 : 0b10101010;
-    memset(dma_buffer1, pattern, packed_row_bytes);
-    memset(dma_buffer2, pattern, packed_row_bytes);
-
-    for (int passes = 0; passes < 8; passes++) {
-      for (int row = 0; row < _config.height; ++row) {
-        sendRow(row == 0);
-      }
-      delay(_config.latch_delay);
-    }
-  }
 
   memset(dma_buffer1, 0x00, packed_row_bytes);
   memset(dma_buffer2, 0x00, packed_row_bytes);
