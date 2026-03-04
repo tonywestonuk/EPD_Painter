@@ -24,32 +24,39 @@ static const uint8_t kDataSignals[8] = {
   LCD_DATA_OUT7_IDX,
 };
 
-epd_painter_powerctl* powerctl = nullptr;
-TwoWire* _wire = nullptr;
+
+
+epd_painter_powerctl *powerctl = nullptr;
+TwoWire *_wire = nullptr;
 
 // Assembly routines — see EPD_Painter.S for full documentation
 extern "C" void epd_painter_compact_pixels(
   const uint8_t *input, uint8_t *output, uint32_t size);
 
-extern "C" int epd_painter_convert_packed_fb_to_ink(
+extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
-  const uint32_t *waveform);
+  const uint8_t *waveform, uint32_t chunk_flags);
 
-extern "C" void epd_painter_ink_on(
-  const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
-  uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
+extern "C" uint32_t epd_painter_ink_on(
+    uint8_t *packed_fastbuffer,
+    const uint8_t *packed_screenbuffer,
+    uint32_t length_bytes
+);
 
 extern "C" void epd_painter_ink_off(
-  const uint8_t *packed_src_fb, const uint8_t *packed_cmp_fb,
-  uint8_t *packed_out_fb, int16_t width, int16_t height, bool interlace_period);
+  uint8_t *packed_fastbuffer,
+  uint8_t *packed_screenbuffer,
+  uint32_t length_bytes,
+  uint32_t bitmask);
 
 extern "C" void epd_painter_interleaved_copy(
   const uint8_t *input, uint8_t *output,
   int16_t width, int16_t height, bool interlace_period);
 
+extern "C" uint32_t epd_painter_ink(uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t bitmask);
+
 static inline void epd_gpio_func_sel(int pin) {
   esp_rom_gpio_pad_select_gpio((gpio_num_t)pin);
-
 }
 
 static inline void gpio_set_fast(uint8_t pin) {
@@ -79,55 +86,61 @@ static inline void gpio_clear_fast(uint8_t pin) {
 
 EPD_Painter::EPD_Painter(const Config &config)
   : GFXcanvas8(config.width, config.height, false) {
-    _config = config;
+  _config = config;
 }
 
 
-void EPD_Painter::setQuality(Quality quality){
-      switch (quality) {
-        case Quality::QUALITY_HIGH:
-            _config.latch_delay=9;
-            break;
-        case Quality::QUALITY_NORMAL:
-            _config.latch_delay=4;
-            break;
-        case Quality::QUALITY_FAST:
-            _config.latch_delay=1;
-            break;
-    }
+void EPD_Painter::setQuality(Quality quality) {
+  switch (quality) {
+    case Quality::QUALITY_HIGH:
+      _config.latch_delay = 9;
+      break;
+    case Quality::QUALITY_NORMAL:
+      _config.latch_delay = 4;
+      break;
+    case Quality::QUALITY_FAST:
+      _config.latch_delay = 1;
+      break;
+  }
 }
 
 // =============================================================================
 // sendRow()
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
-  dma_buffer = (dma_buffer == dma_buffer1) ? dma_buffer2 : dma_buffer1;
+
+// Wait for last to complete..
+
 
   while (LCD_CAM.lcd_user.lcd_start) {
     yield();
   }
 
+
   if (firstLine) {
     // Reset to top of page
     gpio_clear_fast(_config.pin_spv);
-    delayMicroseconds(1);
-
     gpio_clear_fast(_config.pin_ckv);
-    delayMicroseconds(1);
-
+    gdma_reset(dma_chan);   // Use the DMA reset time, as a delay for the pins.
     gpio_set_fast(_config.pin_ckv);
-    delayMicroseconds(1);
-
     gpio_set_fast(_config.pin_spv);
   } else {
     gpio_clear_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_le);
-    delayMicroseconds(1);
+    gdma_reset(dma_chan);
     gpio_clear_fast(_config.pin_le);
     gpio_set_fast(_config.pin_ckv);
   }
 
-  shouldSkipRow = skipRow;
+  if (dma_buffer == dma_buffer1){
+    gdma_start(dma_chan, (intptr_t)&dma_desc1);
+    dma_buffer = dma_buffer2;
+  }  else {
+    gdma_start(dma_chan, (intptr_t)&dma_desc2);
+    dma_buffer = dma_buffer1;
+  }
+
+
 
   LCD_CAM.lcd_user.lcd_start = 1;
 
@@ -156,22 +169,22 @@ bool EPD_Painter::begin() {
 
 
   // -- Start I2C if needed.
-  if (_config.i2c.scl!=-1 && _config.i2c.wire==nullptr){
+  if (_config.i2c.scl != -1 && _config.i2c.wire == nullptr) {
     _wire = new TwoWire(0);
     _wire->begin(_config.i2c.sda, _config.i2c.scl, _config.i2c.freq);
     _config.i2c.wire = _wire;
     delay(50);
   }
-  
+
 
   // ---- Configure EPD control pins ----
   pinMode(_config.pin_pwr, OUTPUT);
   pinMode(_config.pin_spv, OUTPUT);
   pinMode(_config.pin_ckv, OUTPUT);
   pinMode(_config.pin_sph, OUTPUT);
-  pinMode(_config.pin_oe,  OUTPUT);
-  pinMode(_config.pin_le,  OUTPUT);
-  pinMode(_config.pin_cl,  OUTPUT);
+  pinMode(_config.pin_oe, OUTPUT);
+  pinMode(_config.pin_le, OUTPUT);
+  pinMode(_config.pin_cl, OUTPUT);
 
 
   packed_row_bytes = _config.width / 4;
@@ -247,19 +260,19 @@ bool EPD_Painter::begin() {
 
   // ---- Set up circular DMA descriptor chain ----
   dma_desc2.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-  dma_desc2.dw0.suc_eof = 0;
+  dma_desc2.dw0.suc_eof = 1;
   dma_desc2.dw0.size = packed_row_bytes;
   dma_desc2.dw0.length = packed_row_bytes;
   dma_desc2.buffer = const_cast<uint8_t *>(dma_buffer2);
 
   dma_desc1.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-  dma_desc1.dw0.suc_eof = 0;
+  dma_desc1.dw0.suc_eof = 1;
   dma_desc1.dw0.size = packed_row_bytes;
   dma_desc1.dw0.length = packed_row_bytes;
   dma_desc1.buffer = const_cast<uint8_t *>(dma_buffer1);
 
-  dma_desc1.next = &dma_desc2;
-  dma_desc2.next = &dma_desc1;
+  dma_desc1.next = nullptr;
+  dma_desc2.next = nullptr;
 
   LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
   gdma_start(dma_chan, (intptr_t)&dma_desc1);
@@ -273,11 +286,16 @@ bool EPD_Painter::begin() {
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
+  bitmask = static_cast<uint32_t *>(
+    heap_caps_aligned_alloc(4, height()*4, MALLOC_CAP_SPIRAM));
+
   memset(packed_screenbuffer, 0x00, packed_size);
+  memset(bitmask, 0, height() * sizeof(uint32_t));
+
   memset(getBuffer(), 0x00, _config.width * _config.height);
 
-    // ── If a tps chip is used, initalise PowerCtl Init ──
-  if (_config.power.tps_addr!=-1){
+  // ── If a tps chip is used, initalise PowerCtl Init ──
+  if (_config.power.tps_addr != -1) {
     Serial.println("\n── PowerCtl Init ──");
     powerctl = new epd_painter_powerctl();
     if (!powerctl->begin(_config)) {
@@ -314,7 +332,7 @@ void EPD_Painter::powerOn() {
   if (powerctl) {
     powerctl->powerOn();
   } else {
-    digitalWrite(_config.pin_oe,  HIGH);
+    digitalWrite(_config.pin_oe, HIGH);
     delayMicroseconds(100);
     digitalWrite(_config.pin_pwr, HIGH);
     delayMicroseconds(100);
@@ -331,9 +349,9 @@ void EPD_Painter::powerOn() {
 
 void EPD_Painter::powerOff() {
   if (powerctl) {
-    powerctl->powerOn();
+    powerctl->powerOff();
   } else {
-    digitalWrite(_config.pin_oe,  LOW);
+    digitalWrite(_config.pin_oe, LOW);
     delayMicroseconds(100);
     digitalWrite(_config.pin_pwr, LOW);
     delayMicroseconds(100);
@@ -363,42 +381,50 @@ void EPD_Painter::paint(int passes) {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
 
+  epd_painter_compact_pixels(buffer, packed_fastbuffer, width() * height());
 
-  for (int paint_pass=0; paint_pass<passes; paint_pass++) {
-      epd_painter_compact_pixels(buffer, packed_fastbuffer, width()*height());
+for (int row = 0; row < height(); row++) {
+    uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+    uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
+    bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, bitmask[row]);
+}
 
+  //epd_painter_ink_on(
+  // packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  // packed_row_bytes, height(), interlace_period);
 
-  epd_painter_ink_on(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), interlace_period);
-
-  epd_painter_ink_off(
-    packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-    packed_row_bytes, height(), !interlace_period);
+  // epd_painter_ink_off(
+  //   packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
+  //   packed_row_bytes, height(), !interlace_period);
 
   for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
-    const uint32_t lighter_fmt =
-      ((lighter_waveform[0][pass] << 16) +
-       (lighter_waveform[1][pass] << 8)  +
-        lighter_waveform[2][pass]) * 0x55;
+    uint8_t lighter_wf[3] = {
+      (uint8_t)(lighter_waveform[2][pass] * 0x55),
+      (uint8_t)(lighter_waveform[1][pass] * 0x55),
+      (uint8_t)(lighter_waveform[0][pass] * 0x55)
+    };
 
-    const uint32_t darker_fmt =
-      ((darker_waveform[0][pass] << 16) +
-       (darker_waveform[1][pass] << 8)  +
-        darker_waveform[2][pass]) * 0x55;
+    uint8_t darker_wf[3] = {
+      (uint8_t)(darker_waveform[2][pass] * 0x55),
+      (uint8_t)(darker_waveform[1][pass] * 0x55),
+      (uint8_t)(darker_waveform[0][pass] * 0x55)
+    };
 
     for (int row = 0; row < height(); row++) {
-      uint32_t waveform = (row % 2 == interlace_period) ? darker_fmt : lighter_fmt;
-      int changed=epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &waveform);
+      uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
 
-      sendRow(row == 0, false, changed==0);
+     epd_painter_convert_packed_fb_to_ink(
+       fb_row, dma_buffer, packed_row_bytes,
+       darker_wf, bitmask[row]);
+       
+      epd_painter_convert_packed_fb_to_ink(
+      fb_row, dma_buffer, packed_row_bytes,
+      lighter_wf, ~bitmask[row]);
+ 
+      sendRow(row == 0, false, false);
     }
+   
     delay(_config.latch_delay);
-  }
-  interlace_period = !interlace_period;
-
   }
 
   memset(dma_buffer1, 0x00, packed_row_bytes);
@@ -406,7 +432,6 @@ void EPD_Painter::paint(int passes) {
   for (int row = 0; row < height(); ++row) {
     sendRow(row == 0, row == height() - 1);
   }
-
 }
 
 // =============================================================================
@@ -415,24 +440,31 @@ void EPD_Painter::paint(int passes) {
 void EPD_Painter::clear() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = width() / 4;
+  
+  uint32_t bitmask[height()];
 
-  memset(packed_fastbuffer, 0x00, height() * packed_row_bytes);
+  memset(packed_fastbuffer,0x00,packed_row_bytes*height());
 
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), true);
-  epd_painter_ink_off(packed_fastbuffer, packed_screenbuffer, packed_fastbuffer,
-                      packed_row_bytes, height(), false);
+
+  for (int row = 0; row < height(); row++) {
+    uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+    uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
+
+    epd_painter_ink_off(fb_row, sb_row, packed_row_bytes, bitmask[row]);
+  }
+
+
 
   for (uint8_t pass = 0; pass < PASS_COUNT; pass++) {
-    const uint32_t lighter_fmt =
-      ((lighter_waveform[0][pass] << 16) +
-       (lighter_waveform[1][pass] << 8)  +
-        lighter_waveform[2][pass]) * 0x55;
+    uint8_t lighter_wf[3] = {
+      (uint8_t)(lighter_waveform[2][pass] * 0x55),
+      (uint8_t)(lighter_waveform[1][pass] * 0x55),
+      (uint8_t)(lighter_waveform[0][pass] * 0x55)
+    };
 
     for (int row = 0; row < height(); row++) {
-      epd_painter_convert_packed_fb_to_ink(
-        packed_fastbuffer + row * packed_row_bytes,
-        dma_buffer, packed_row_bytes, &lighter_fmt);
+      uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+      epd_painter_convert_packed_fb_to_ink( fb_row , dma_buffer, packed_row_bytes,lighter_wf, 0xff);
       sendRow(row == 0);
     }
     delay(_config.latch_delay);

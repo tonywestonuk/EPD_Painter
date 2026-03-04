@@ -78,6 +78,7 @@ private:
 
   uint8_t* packed_fastbuffer  = nullptr;  // 2bpp current frame  (internal RAM)
   uint8_t* packed_screenbuffer = nullptr; // 2bpp previous frame (PSRAM)
+  uint32_t* bitmask = nullptr;
 
   
 
