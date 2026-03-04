@@ -87,5 +87,6 @@ void loop() {
     epd.print("Hello World");
   }
   epd.paint();
+  epd.paint();
 
 }

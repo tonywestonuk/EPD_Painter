@@ -120,7 +120,7 @@ void setup() {
     Serial.println("EPD init failed");
     while (1);
   }
-  epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
   epd.clear();
   epd.clear();
 

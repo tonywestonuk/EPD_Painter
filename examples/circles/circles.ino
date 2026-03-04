@@ -8,7 +8,7 @@
 #include "EPD_Painter_presets.h"
 
 
-EPD_Painter epd(EPD_PAINTER_PRESET)
+EPD_Painter epd(EPD_PAINTER_PRESET);
 
 void setup() {
 if (!epd.begin()) {

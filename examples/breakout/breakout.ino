@@ -19,7 +19,7 @@ XPowersPPM PPM;
 #endif
 
 // --- Game constants ---
-#define BALL_SIZE    25
+#define BALL_SIZE    23
 #define BALL_SPEED   24.0f
 #define NUM_BALLS    3
 
@@ -154,7 +154,7 @@ void setup() {
     while (1);
   }
 
-  epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
   epd.clear();
   epd.clear();
 
