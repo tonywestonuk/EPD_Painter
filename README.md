@@ -1,3 +1,6 @@
+![epd painter logo](img/epdpainter_logo.png "")
+
+
 # EPD_Painter
 Fast m5paperS3 epaper driver
 
