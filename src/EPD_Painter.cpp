@@ -384,8 +384,6 @@ static uint8_t hq_darker_waveform[][13] = {
 // =============================================================================
 void EPD_Painter::paint(uint8_t* framebuffer) {
 
-  Serial.println("fff");
-
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = _config.width / 4;
 
@@ -450,6 +448,7 @@ for (int row = 0; row < _config.height; row++) {
   for (int row = 0; row < _config.height; ++row) {
     sendRow(row == 0, row == _config.height - 1);
   }
+
 }
 
 // =============================================================================
