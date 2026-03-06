@@ -36,6 +36,15 @@
 class EPD_PainterLVGL {
 public:
 
+    // EPD shade constants — use these instead of lv_color_black()/white().
+    // LVGL renders to 8-bit RGB332; the EPD driver reads the 2 LSBs of each
+    // byte as the pixel value (0=white … 3=black). The blue channel in RGB332
+    // supplies those 2 bits, so we drive it with multiples of 85 (0x55).
+    inline static const lv_color_t WHITE   = lv_color_make(0, 0,   0);   // blue>>6 = 0
+    inline static const lv_color_t LT_GREY = lv_color_make(0, 0,  85);   // blue>>6 = 1
+    inline static const lv_color_t DK_GREY = lv_color_make(0, 0, 170);   // blue>>6 = 2
+    inline static const lv_color_t BLACK   = lv_color_make(0, 0, 255);   // blue>>6 = 3
+
     explicit EPD_PainterLVGL(const EPD_Painter::Config &config)
         : _config(config),
           _painter(config)
@@ -81,6 +90,7 @@ public:
     // end()
     // -------------------------------------------------------------------------
     bool end() { return _painter.end(); }
+    void clear() { _painter.clear(); }
 
     // -------------------------------------------------------------------------
     // Quality
@@ -110,6 +120,7 @@ private:
     // -------------------------------------------------------------------------
     static void _flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
         auto *self = static_cast<EPD_PainterLVGL *>(lv_display_get_user_data(disp));
+        self->_painter.paint(px_map);
         self->_painter.paint(px_map);
         lv_display_flush_ready(disp);
     }

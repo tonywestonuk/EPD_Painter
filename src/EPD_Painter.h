@@ -22,6 +22,11 @@ struct PowerCtlConfig {
     int tps_addr=-1;
     int vcom_mv=-1;
 };
+  enum class Quality {
+    QUALITY_HIGH,
+    QUALITY_NORMAL,
+    QUALITY_FAST
+  };
 
   struct Config {
       uint16_t width;
@@ -34,17 +39,12 @@ struct PowerCtlConfig {
       int8_t pin_ckv;
       int8_t pin_le;
       int8_t latch_delay;
+      Quality quality;
       int8_t data_pins[8];
       I2CBusConfig i2c{};
       PowerCtlConfig power{};
   };
 
-
-  enum class Quality {
-    QUALITY_HIGH,
-    QUALITY_NORMAL,
-    QUALITY_FAST
-  };
 
   Config _config;
 
