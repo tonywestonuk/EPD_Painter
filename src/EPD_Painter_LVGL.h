@@ -83,6 +83,8 @@ public:
         lv_display_set_flush_cb(_disp, _flush_cb);
         lv_display_set_user_data(_disp, this);
 
+        
+
         return true;
     }
 
@@ -100,7 +102,7 @@ public:
     // -------------------------------------------------------------------------
     // Config accessor — mirrors EPD_PainterAdafruit
     // -------------------------------------------------------------------------
-    EPD_Painter::Config getConfig() { return _config; }
+    EPD_Painter::Config getConfig() { return _painter.getConfig(); }
 
     // -------------------------------------------------------------------------
     // Access to the underlying driver if needed
@@ -120,7 +122,6 @@ private:
     // -------------------------------------------------------------------------
     static void _flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
         auto *self = static_cast<EPD_PainterLVGL *>(lv_display_get_user_data(disp));
-        self->_painter.paint(px_map);
         self->_painter.paint(px_map);
         lv_display_flush_ready(disp);
     }

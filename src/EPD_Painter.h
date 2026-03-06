@@ -77,9 +77,16 @@ private:
   uint8_t* dma_buffer1       = nullptr;  //  Row Double buffer A
   uint8_t* dma_buffer2       = nullptr;  //. Row Double buffer B
 
-  uint8_t* packed_fastbuffer  = nullptr;  // 2bpp current frame  (internal RAM)
-  uint8_t* packed_screenbuffer = nullptr; // 2bpp previous frame (PSRAM)
-  uint32_t* bitmask = nullptr;
+  uint8_t* packed_fastbuffer   = nullptr;   // 2bpp working buffer for draw passes
+  uint8_t* _pack_bufs[2]       = {};        // 2bpp staging queue buffers
+  uint8_t* _pqueue[2]          = {};        // ring buffer of pointers into _pack_bufs
+  int      _pq_head            = 0;
+  int      _pq_count           = 0;
+  int      _pq_wbuf            = 0;         // which _pack_bufs slot to write to next
+  SemaphoreHandle_t _pq_mutex  = nullptr;
+  SemaphoreHandle_t _pq_sem    = nullptr;   // counting semaphore, max 2
+  uint8_t* packed_screenbuffer = nullptr;   // 2bpp previous frame (PSRAM)
+  uint32_t* bitmask            = nullptr;
 
   
 
@@ -91,6 +98,10 @@ private:
   void powerOn();
   void powerOff();
   void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
+  void _compactFrame(uint8_t* framebuffer, uint8_t* dest);
+  void _drawPasses();
+  static void _drawTaskEntry(void* arg);
+  TaskHandle_t _draw_task = nullptr;
 
   // ---- Power management ----
   class PanelPowerGuard {

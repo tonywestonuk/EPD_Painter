@@ -276,6 +276,14 @@ bool EPD_Painter::begin() {
   packed_fastbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
 
+  _pack_bufs[0] = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+  _pack_bufs[1] = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+
+  _pq_mutex = xSemaphoreCreateMutex();
+  _pq_sem   = xSemaphoreCreateCounting(2, 0);
+
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
@@ -296,6 +304,8 @@ bool EPD_Painter::begin() {
   }
 
 
+
+  xTaskCreatePinnedToCore(_drawTaskEntry, "epd_draw", 4096, this, 5, &_draw_task, 0);
 
   return (dma_buffer && packed_fastbuffer && packed_screenbuffer);
 }
@@ -380,22 +390,62 @@ static uint8_t hq_darker_waveform[][13] = {
 
 
 // =============================================================================
-// paint()
+// _compactFrame() — compact LVGL framebuffer into a staging queue buffer.
+// Must always be called from the same task as LVGL (the paint() caller).
+// =============================================================================
+void EPD_Painter::_compactFrame(uint8_t* framebuffer, uint8_t* dest) {
+  epd_painter_compact_pixels(framebuffer, dest, _config.width * _config.height);
+}
+
+// =============================================================================
+// paint() — compact into a queue slot and enqueue for the draw task.
+//   Queue max = 2. If full, the tail is replaced in-place (mutex held during
+//   compact to prevent the draw task dequeuing it mid-write).
 // =============================================================================
 void EPD_Painter::paint(uint8_t* framebuffer) {
+  PanelPowerGuard guard(*this);
+
+  xSemaphoreTake(_pq_mutex, portMAX_DELAY);
+
+  if (_pq_count == 2) {
+    // Queue full — overwrite tail in-place. Hold mutex during compact so the
+    // draw task cannot dequeue the tail buffer while we are writing into it.
+    int tail = (_pq_head + 1) % 2;
+    uint8_t* dest = _pqueue[tail];
+    _compactFrame(framebuffer, dest);   // ~10 ms under mutex
+    xSemaphoreGive(_pq_mutex);
+    // Semaphore count unchanged — no new slot added.
+
+  } else {
+    // Queue has room — compact into the next write buffer outside the mutex.
+    uint8_t* dest = _pack_bufs[_pq_wbuf];
+    xSemaphoreGive(_pq_mutex);
+
+    _compactFrame(framebuffer, dest);   // ~10 ms, mutex not held
+
+    xSemaphoreTake(_pq_mutex, portMAX_DELAY);
+    _pqueue[(_pq_head + _pq_count) % 2] = dest;
+    _pq_count++;
+    _pq_wbuf ^= 1;
+    xSemaphoreGive(_pq_mutex);
+
+    xSemaphoreGive(_pq_sem);   // wake / increment draw task
+  }
+}
+
+// =============================================================================
+// _drawPasses() — waveform passes + blanking. Runs inside the draw task.
+// =============================================================================
+void EPD_Painter::_drawPasses() {
+
+  for (int row = 0; row < _config.height; row++) {
+    uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+    uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
+    bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, 0xffffffff);
+  }
 
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = _config.width / 4;
-
-  epd_painter_compact_pixels(framebuffer, packed_fastbuffer, _config.width * _config.height);
-
-
-for (int row = 0; row < _config.height; row++) {
-    uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-    uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
-   // bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, bitmask[row]);
-    bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, 0xffffffff);
-}
 
   const uint8_t *lt_wf;
   const uint8_t *dk_wf;
@@ -410,7 +460,6 @@ for (int row = 0; row < _config.height; row++) {
       dk_wf = &darker_waveform[0][0];
       wf_len = 7;
   }
-
 
   for (uint8_t pass = 0; pass < wf_len; pass++) {
 
@@ -429,17 +478,17 @@ for (int row = 0; row < _config.height; row++) {
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
 
-     epd_painter_convert_packed_fb_to_ink(
-       fb_row, dma_buffer, packed_row_bytes,
-       darker_wf, bitmask[row]);
-       
       epd_painter_convert_packed_fb_to_ink(
-      fb_row, dma_buffer, packed_row_bytes,
-      lighter_wf, ~bitmask[row]);
- 
+        fb_row, dma_buffer, packed_row_bytes,
+        darker_wf, bitmask[row]);
+
+      epd_painter_convert_packed_fb_to_ink(
+        fb_row, dma_buffer, packed_row_bytes,
+        lighter_wf, ~bitmask[row]);
+
       sendRow(row == 0, false, false);
     }
-   
+
     delay(_config.latch_delay);
   }
 
@@ -448,7 +497,37 @@ for (int row = 0; row < _config.height; row++) {
   for (int row = 0; row < _config.height; ++row) {
     sendRow(row == 0, row == _config.height - 1);
   }
+}
 
+// =============================================================================
+// _drawTaskEntry() — dequeues compacted frames, copies to packed_fastbuffer,
+//   and draws. Drains the queue, then does one final draw of the last frame.
+// =============================================================================
+void EPD_Painter::_drawTaskEntry(void* arg) {
+  auto* self = static_cast<EPD_Painter*>(arg);
+  const size_t packed_size = ((size_t)self->_config.width * self->_config.height) / 4;
+
+  for (;;) {
+    // Block until at least one frame is queued.
+    xSemaphoreTake(self->_pq_sem, portMAX_DELAY);
+
+    do {
+      // Dequeue head.
+      xSemaphoreTake(self->_pq_mutex, portMAX_DELAY);
+      uint8_t* buf = self->_pqueue[self->_pq_head];
+      self->_pq_head  = (self->_pq_head + 1) % 2;
+      self->_pq_count--;
+      xSemaphoreGive(self->_pq_mutex);
+
+      // Copy staging buffer into the working fastbuffer, then draw.
+      memcpy(self->packed_fastbuffer, buf, packed_size);
+      self->_drawPasses();
+
+    } while (xSemaphoreTake(self->_pq_sem, 0) == pdTRUE);
+
+    // Queue now empty — do one final draw of the last frame already in fastbuffer.
+    self->_drawPasses();
+  }
 }
 
 // =============================================================================
