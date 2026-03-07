@@ -63,9 +63,6 @@ struct PowerCtlConfig {
 
 
 private:
-
-
-
   // ---- LCD_CAM / DMA ----
   gdma_channel_handle_t dma_chan = nullptr;
   dma_descriptor_t      dma_desc1 = {};
@@ -81,6 +78,7 @@ private:
   uint8_t* packed_screenbuffer = nullptr; // 2bpp previous frame (PSRAM)
   uint32_t* bitmask = nullptr;
 
+
   
 
   int packed_row_bytes = 0;
@@ -91,6 +89,14 @@ private:
   void powerOn();
   void powerOff();
   void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
+
+  // ---- Dual-core paint task ----
+  SemaphoreHandle_t _paint_start_sem = nullptr;  // signals task to start
+  SemaphoreHandle_t _paint_done_sem  = nullptr;  // signals task has finished
+  TaskHandle_t      _paint_task_h    = nullptr;
+
+  static void _paint_task_entry(void *arg);
+  void _paint_task_body();
 
   // ---- Power management ----
   class PanelPowerGuard {

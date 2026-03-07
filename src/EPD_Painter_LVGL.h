@@ -4,6 +4,8 @@
 #include <lvgl.h>
 #include <esp_heap_caps.h>
 #include "EPD_Painter.h"
+#include "esp_timer.h"
+
 
 // =============================================================================
 // EPD_PainterLVGL
@@ -46,11 +48,14 @@ public:
     inline static const lv_color_t BLACK   = lv_color_make(0, 0, 255);   // blue>>6 = 3
 
     explicit EPD_PainterLVGL(const EPD_Painter::Config &config)
-        : _config(config),
-          _painter(config)
+        : _painter(config)
     {}
 
     ~EPD_PainterLVGL() {
+        if (_paint_timer) {
+            lv_timer_delete(_paint_timer);
+            _paint_timer = nullptr;
+        }
         heap_caps_free(_framebuffer);
         _framebuffer = nullptr;
     }
@@ -60,7 +65,7 @@ public:
     // Call after lv_init() and lv_tick_set_cb(), before creating any widgets.
     // -------------------------------------------------------------------------
     bool begin() {
-        const size_t buf_size = (size_t)_config.width * (size_t)_config.height;
+        const size_t buf_size = (size_t)_painter.getConfig().width * (size_t)_painter.getConfig().height;
 
         _framebuffer = static_cast<uint8_t *>(
             heap_caps_aligned_alloc(16, buf_size, MALLOC_CAP_SPIRAM));
@@ -72,7 +77,7 @@ public:
 
         // Register with LVGL — FULL mode means flush_cb is called once per
         // frame with the complete buffer, ideal for eInk.
-        _disp = lv_display_create(_config.width, _config.height);
+        _disp = lv_display_create(_painter.getConfig().width, _painter.getConfig().height);
         lv_display_set_buffers(
             _disp,
             _framebuffer,
@@ -83,6 +88,9 @@ public:
         lv_display_set_flush_cb(_disp, _flush_cb);
         lv_display_set_user_data(_disp, this);
 
+        // Task runs every lv_timer_handler() call; does the actual EPD paint.
+        _paint_timer = lv_timer_create(_paint_task_cb, 0, this);
+
         return true;
     }
 
@@ -90,7 +98,10 @@ public:
     // end()
     // -------------------------------------------------------------------------
     bool end() { return _painter.end(); }
-    void clear() { _painter.clear(); }
+    void clear() { 
+        _painter.clear(); 
+        
+    }
 
     // -------------------------------------------------------------------------
     // Quality
@@ -100,7 +111,7 @@ public:
     // -------------------------------------------------------------------------
     // Config accessor — mirrors EPD_PainterAdafruit
     // -------------------------------------------------------------------------
-    EPD_Painter::Config getConfig() { return _config; }
+    EPD_Painter::Config getConfig() { return _painter.getConfig(); }
 
     // -------------------------------------------------------------------------
     // Access to the underlying driver if needed
@@ -108,20 +119,51 @@ public:
     EPD_Painter  &driver()  { return _painter; }
     lv_display_t *display() { return _disp; }
 
+    // -------------------------------------------------------------------------
+    // setPaintPasses() — how many times paint() is called per flush.
+    // 1 = single pass (default); 2 = two sequential paint passes per frame.
+    // -------------------------------------------------------------------------
+    void setPaintPasses(uint8_t n) { _paint_passes = (n > 0) ? n : 1; }
+
 private:
-    EPD_Painter::Config  _config;
-    uint8_t             *_framebuffer = nullptr;    // owned here
-    EPD_Painter          _painter;                  // borrows _framebuffer
-    lv_display_t        *_disp        = nullptr;
+    uint8_t             *_framebuffer    = nullptr;   // owned here
+    EPD_Painter          _painter;                    // borrows _framebuffer
+    lv_display_t        *_disp           = nullptr;
+    lv_timer_t          *_paint_timer    = nullptr;
+
+    uint8_t             *_pending_px_map = nullptr;   // set by flush_cb
+    bool                 _flush_pending  = false;     // task consumes this
+    uint8_t              _paint_pass     = 0;         // passes completed
+    uint8_t              _paint_passes   = 2;         // passes required
 
     // -------------------------------------------------------------------------
-    // LVGL flush callback — called once per frame in FULL render mode.
-    // px_map is the framebuffer LVGL just finished rendering into.
+    // LVGL flush callback — stores the buffer pointer and returns immediately.
+    // The actual EPD paint happens in _paint_task_cb.
     // -------------------------------------------------------------------------
     static void _flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
         auto *self = static_cast<EPD_PainterLVGL *>(lv_display_get_user_data(disp));
-        self->_painter.paint(px_map);
-        self->_painter.paint(px_map);
+        self->_pending_px_map = px_map;
+        self->_paint_pass     = 0;
+        self->_flush_pending  = true;
         lv_display_flush_ready(disp);
+    }
+
+    // -------------------------------------------------------------------------
+    // LVGL task callback — runs every lv_timer_handler() iteration.
+    // Calls paint() once per invocation until _paint_passes have been done.
+    // -------------------------------------------------------------------------
+    static void _paint_task_cb(lv_timer_t *timer) {
+        auto *self = static_cast<EPD_PainterLVGL *>(lv_timer_get_user_data(timer));
+        if (!self->_flush_pending) return;
+
+        self->_painter.paint(self->_pending_px_map);
+
+        self->_paint_pass++;
+
+        if (self->_paint_pass >= self->_paint_passes) {
+            self->_flush_pending  = false;
+            self->_pending_px_map = nullptr;
+            self->_paint_pass     = 0;
+        }
     }
 };

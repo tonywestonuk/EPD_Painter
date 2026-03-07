@@ -15,7 +15,12 @@
         .pin_ckv  = 18,
         .pin_le   = 15,
         .quality  = EPD_Painter::Quality::QUALITY_NORMAL,
-        .data_pins = { 6, 14, 7, 12, 9, 11, 8, 10 }
+        .data_pins = { 6, 14, 7, 12, 9, 11, 8, 10 },
+        .i2c = {
+            .sda = 41,
+            .scl = 42,
+            .freq = 100000
+        },
     };
 
 #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)

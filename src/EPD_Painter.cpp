@@ -94,7 +94,7 @@ void EPD_Painter::setQuality(Quality quality) {
       _config.latch_delay = 4;
       break;
     case Quality::QUALITY_FAST:
-      _config.latch_delay = 0;
+      _config.latch_delay = 1;
       break;
   }
 }
@@ -274,7 +274,7 @@ bool EPD_Painter::begin() {
   const size_t packed_size = (_config.width * _config.height) / 4;
 
   packed_fastbuffer = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
@@ -297,13 +297,29 @@ bool EPD_Painter::begin() {
 
 
 
-  return (dma_buffer && packed_fastbuffer && packed_screenbuffer);
+  if (!(dma_buffer && packed_fastbuffer && packed_screenbuffer)) return false;
+
+  _paint_start_sem = xSemaphoreCreateBinary();
+  _paint_done_sem  = xSemaphoreCreateBinary();
+  xSemaphoreGive(_paint_done_sem);  // available immediately so first paint() doesn't block
+
+  xTaskCreatePinnedToCore(
+    _paint_task_entry, "epd_paint", 4096, this, 10, &_paint_task_h, 0);
+
+  return true;
 }
 
 // =============================================================================
 // end()
 // =============================================================================
 bool EPD_Painter::end() {
+  if (_paint_task_h) {
+    vTaskDelete(_paint_task_h);
+    _paint_task_h = nullptr;
+  }
+  if (_paint_start_sem) { vSemaphoreDelete(_paint_start_sem); _paint_start_sem = nullptr; }
+  if (_paint_done_sem)  { vSemaphoreDelete(_paint_done_sem);  _paint_done_sem  = nullptr; }
+
   if (dma_chan) {
     gdma_disconnect(dma_chan);
     gdma_del_channel(dma_chan);
@@ -381,74 +397,82 @@ static uint8_t hq_darker_waveform[][13] = {
 
 // =============================================================================
 // paint()
+// Called from the LVGL task (core 1). Blocks until any previous paint task
+// has finished, runs compact_pixels on this core, then hands off to the
+// dedicated paint task on core 0.
 // =============================================================================
 void EPD_Painter::paint(uint8_t* framebuffer) {
-
-  PanelPowerGuard guard(*this);
-  const int packed_row_bytes = _config.width / 4;
-
+  xSemaphoreTake(_paint_done_sem, portMAX_DELAY);
   epd_painter_compact_pixels(framebuffer, packed_fastbuffer, _config.width * _config.height);
-
-
-for (int row = 0; row < _config.height; row++) {
-    uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-    uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
-   // bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, bitmask[row]);
-    bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, 0xffffffff);
+  xSemaphoreGive(_paint_start_sem);
 }
 
-  const uint8_t *lt_wf;
-  const uint8_t *dk_wf;
-  int wf_len;
+// =============================================================================
+// _paint_task_entry() / _paint_task_body()
+// Runs on core 0. Waits for paint() to signal, then drives the EPD waveform.
+// =============================================================================
+void EPD_Painter::_paint_task_entry(void *arg) {
+  static_cast<EPD_Painter*>(arg)->_paint_task_body();
+}
 
-  if (_config.quality == Quality::QUALITY_HIGH) {
-      lt_wf = &hq_lighter_waveform[0][0];
-      dk_wf = &hq_darker_waveform[0][0];
-      wf_len = 13;
-  } else {
-      lt_wf = &lighter_waveform[0][0];
-      dk_wf = &darker_waveform[0][0];
-      wf_len = 7;
-  }
+void EPD_Painter::_paint_task_body() {
+  for (;;) {
+    xSemaphoreTake(_paint_start_sem, portMAX_DELAY);
 
-
-  for (uint8_t pass = 0; pass < wf_len; pass++) {
-
-    uint8_t lighter_wf[3] = {
-        (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[1 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[0 * wf_len + pass] * 0x55)
-    };
-
-    uint8_t darker_wf[3] = {
-        (uint8_t)(dk_wf[2 * wf_len + pass] * 0x55),
-        (uint8_t)(dk_wf[1 * wf_len + pass] * 0x55),
-        (uint8_t)(dk_wf[0 * wf_len + pass] * 0x55)
-    };
+    PanelPowerGuard guard(*this);
 
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-
-     epd_painter_convert_packed_fb_to_ink(
-       fb_row, dma_buffer, packed_row_bytes,
-       darker_wf, bitmask[row]);
-       
-      epd_painter_convert_packed_fb_to_ink(
-      fb_row, dma_buffer, packed_row_bytes,
-      lighter_wf, ~bitmask[row]);
- 
-      sendRow(row == 0, false, false);
+      uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
+      bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, 0xffffffff);
     }
-   
-    delay(_config.latch_delay);
-  }
 
-  memset(dma_buffer1, 0x00, packed_row_bytes);
-  memset(dma_buffer2, 0x00, packed_row_bytes);
-  for (int row = 0; row < _config.height; ++row) {
-    sendRow(row == 0, row == _config.height - 1);
-  }
+    const uint8_t *lt_wf;
+    const uint8_t *dk_wf;
+    int wf_len;
 
+    if (_config.quality == Quality::QUALITY_HIGH) {
+      lt_wf = &hq_lighter_waveform[0][0];
+      dk_wf = &hq_darker_waveform[0][0];
+      wf_len = 13;
+    } else {
+      lt_wf = &lighter_waveform[0][0];
+      dk_wf = &darker_waveform[0][0];
+      wf_len = 7;
+    }
+
+    for (uint8_t pass = 0; pass < wf_len; pass++) {
+      uint8_t lighter_wf[3] = {
+        (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
+        (uint8_t)(lt_wf[1 * wf_len + pass] * 0x55),
+        (uint8_t)(lt_wf[0 * wf_len + pass] * 0x55)
+      };
+      uint8_t darker_wf[3] = {
+        (uint8_t)(dk_wf[2 * wf_len + pass] * 0x55),
+        (uint8_t)(dk_wf[1 * wf_len + pass] * 0x55),
+        (uint8_t)(dk_wf[0 * wf_len + pass] * 0x55)
+      };
+
+      for (int row = 0; row < _config.height; row++) {
+        uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, darker_wf,  bitmask[row]);
+        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, lighter_wf, ~bitmask[row]);
+        sendRow(row == 0, false, false);
+      }
+
+      delay(_config.latch_delay);
+    }
+
+    memset(dma_buffer1, 0x00, packed_row_bytes);
+    memset(dma_buffer2, 0x00, packed_row_bytes);
+    for (int row = 0; row < _config.height; ++row) {
+      sendRow(row == 0, row == _config.height - 1);
+    }
+
+    interlace_period = !interlace_period;
+
+    xSemaphoreGive(_paint_done_sem);
+  }
 }
 
 // =============================================================================
@@ -458,7 +482,6 @@ void EPD_Painter::clear() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = _config.width / 4;
   
-  memset(bitmask,0xff,_config.height*4);
   memset(packed_fastbuffer,0x00,packed_row_bytes*_config.height);
 
     const uint8_t *lt_wf;
