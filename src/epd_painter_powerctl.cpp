@@ -1,4 +1,5 @@
 #include "epd_painter_powerctl.h"
+#include "stdio.h"
 
 epd_painter_powerctl::epd_painter_powerctl() {
   _pca_out[0] = 0x00;
@@ -13,26 +14,26 @@ bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
   // Pins 8..13 outputs, 14..15 inputs
   for (int pin = 8; pin <= 13; ++pin) {
     if (!pcaPinMode(pin, OUTPUT)) {
-      Serial.printf("[PWRCTL] Failed setting PCA pin %d OUTPUT\n", pin);
+      printf("[PWRCTL] Failed setting PCA pin %d OUTPUT\n", pin);
       return false;
     }
   }
   if (!pcaPinMode(14, INPUT)) {
-    Serial.println("[PWRCTL] Failed setting PCA pin 14 INPUT");
+    printf("[PWRCTL] Failed setting PCA pin 14 INPUT\n");
     return false;
   }
   if (!pcaPinMode(15, INPUT)) {
-    Serial.println("[PWRCTL] Failed setting PCA pin 15 INPUT");
+    printf("[PWRCTL] Failed setting PCA pin 15 INPUT\n");
     return false;
   }
 
-  Serial.printf("[PWRCTL] PCA init OK. CFG1=0x%02X OUT1=0x%02X\n",
+  printf("[PWRCTL] PCA init OK. CFG1=0x%02X OUT1=0x%02X\n",
                 _pca_cfg[1], _pca_out[1]);
   return true;
 }
 
 bool epd_painter_powerctl::powerOn() {
-  Serial.println("[PWRCTL] Power-on sequence...");
+  printf("[PWRCTL] Power-on sequence... \n");
 
   // 1. OE on, MODE on
   if (!pcaWrite(PIN_OE, true)) return false;
@@ -50,12 +51,12 @@ bool epd_painter_powerctl::powerOn() {
   delay(3);
 
   // 5. Wait for expander PWRGOOD
-  Serial.print("[PWRCTL] Waiting for PWR_GOOD...");
+  printf("[PWRCTL] Waiting for PWR_GOOD...");
   int timeout = 0;
   bool good = false;
   while (timeout < 400) {
     if (!pcaRead(PIN_PWRGOOD, good)) {
-      Serial.println(" read error");
+      printf(" read error \n");
       return false;
     }
     if (good) break;
@@ -63,10 +64,10 @@ bool epd_painter_powerctl::powerOn() {
     ++timeout;
   }
   if (!good) {
-    Serial.println(" TIMEOUT");
+    printf(" TIMEOUT \n");
     return false;
   }
-  Serial.printf(" OK (%d ms)\n", timeout);
+  printf(" OK (%d ms)\n", timeout);
 
   // 6. Configure TPS
   if (!tpsWrite(TPS_UPSEQ0, 0xE1)) return false;
@@ -77,12 +78,12 @@ bool epd_painter_powerctl::powerOn() {
   setVcomMv(config.power.vcom_mv);
 
   // 8. Wait for TPS power good bits
-  Serial.print("[PWRCTL] Waiting for TPS PG...");
+  printf("[PWRCTL] Waiting for TPS PG...");
   timeout = 0;
   uint8_t pg = 0;
   while (timeout < 400) {
     if (!tpsRead(TPS_PG, pg)) {
-      Serial.println(" read error");
+      printf(" read error \n");
       return false;
     }
     if ((pg & 0xFA) == 0xFA) break;
@@ -90,7 +91,7 @@ bool epd_painter_powerctl::powerOn() {
     ++timeout;
   }
 
-  Serial.printf(" PG=0x%02X (%d ms) %s\n",
+  printf(" PG=0x%02X (%d ms) %s\n",
                 pg, timeout, ((pg & 0xFA) == 0xFA) ? "OK" : "TIMEOUT");
 
   return ((pg & 0xFA) == 0xFA);
@@ -98,7 +99,7 @@ bool epd_painter_powerctl::powerOn() {
 
 
 void epd_painter_powerctl::powerOff() {
-  Serial.println("[PWRCTL] Power-off...");
+  printf("[PWRCTL] Power-off... \n");
 
   pcaWrite(PIN_OE, false);
   pcaWrite(PIN_MODE, false);

@@ -39,10 +39,9 @@ extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *waveform, uint32_t chunk_flags);
 
 extern "C" uint32_t epd_painter_ink_on(
-    uint8_t *packed_fastbuffer,
-    const uint8_t *packed_screenbuffer,
-    uint32_t length_bytes
-);
+  uint8_t *packed_fastbuffer,
+  const uint8_t *packed_screenbuffer,
+  uint32_t length_bytes);
 
 extern "C" void epd_painter_ink_off(
   uint8_t *packed_fastbuffer,
@@ -86,17 +85,6 @@ EPD_Painter::EPD_Painter(const Config &config) {
 
 void EPD_Painter::setQuality(Quality quality) {
   _config.quality = quality;
-  switch (quality) {
-    case Quality::QUALITY_HIGH:
-      _config.latch_delay = 4;
-      break;
-    case Quality::QUALITY_NORMAL:
-      _config.latch_delay = 4;
-      break;
-    case Quality::QUALITY_FAST:
-      _config.latch_delay = 1;
-      break;
-  }
 }
 
 // =============================================================================
@@ -104,7 +92,7 @@ void EPD_Painter::setQuality(Quality quality) {
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
 
-// Wait for last to complete..
+  // Wait for last to complete..
 
 
   while (LCD_CAM.lcd_user.lcd_start) {
@@ -116,7 +104,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     // Reset to top of page
     gpio_clear_fast(_config.pin_spv);
     gpio_clear_fast(_config.pin_ckv);
-    gdma_reset(dma_chan);   // Use the DMA reset time, as a delay for the pins.
+    gdma_reset(dma_chan);  // Use the DMA reset time, as a delay for the pins.
     gpio_set_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_spv);
   } else {
@@ -127,10 +115,10 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     gpio_set_fast(_config.pin_ckv);
   }
 
-  if (dma_buffer == dma_buffer1){
+  if (dma_buffer == dma_buffer1) {
     gdma_start(dma_chan, (intptr_t)&dma_desc1);
     dma_buffer = dma_buffer2;
-  }  else {
+  } else {
     gdma_start(dma_chan, (intptr_t)&dma_desc2);
     dma_buffer = dma_buffer1;
   }
@@ -274,13 +262,13 @@ bool EPD_Painter::begin() {
   const size_t packed_size = (_config.width * _config.height) / 4;
 
   packed_fastbuffer = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
 
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
   bitmask = static_cast<uint32_t *>(
-    heap_caps_aligned_alloc(4, _config.height*4, MALLOC_CAP_SPIRAM));
+    heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_SPIRAM));
 
   //memset(packed_screenbuffer, 0x00, packed_size);
   //memset(bitmask, 0, _config.height * sizeof(uint32_t));
@@ -300,7 +288,7 @@ bool EPD_Painter::begin() {
   if (!(dma_buffer && packed_fastbuffer && packed_screenbuffer)) return false;
 
   _paint_start_sem = xSemaphoreCreateBinary();
-  _paint_done_sem  = xSemaphoreCreateBinary();
+  _paint_done_sem = xSemaphoreCreateBinary();
   xSemaphoreGive(_paint_done_sem);  // available immediately so first paint() doesn't block
 
   xTaskCreatePinnedToCore(
@@ -317,8 +305,14 @@ bool EPD_Painter::end() {
     vTaskDelete(_paint_task_h);
     _paint_task_h = nullptr;
   }
-  if (_paint_start_sem) { vSemaphoreDelete(_paint_start_sem); _paint_start_sem = nullptr; }
-  if (_paint_done_sem)  { vSemaphoreDelete(_paint_done_sem);  _paint_done_sem  = nullptr; }
+  if (_paint_start_sem) {
+    vSemaphoreDelete(_paint_start_sem);
+    _paint_start_sem = nullptr;
+  }
+  if (_paint_done_sem) {
+    vSemaphoreDelete(_paint_done_sem);
+    _paint_done_sem = nullptr;
+  }
 
   if (dma_chan) {
     gdma_disconnect(dma_chan);
@@ -375,23 +369,23 @@ static uint8_t lighter_waveform[][7] = {
 };
 
 static uint8_t darker_waveform[][7] = {
-  { 1, 3, 3, 3, 1, 3,1 },
-  { 1, 1, 3, 1, 1, 3,1 },
-  { 1, 1, 1, 1, 1, 1,1 }
+  { 1, 3, 3, 3, 1, 3, 1 },
+  { 1, 1, 3, 1, 1, 3, 1 },
+  { 1, 1, 1, 1, 1, 1, 1 }
 };
 
 
 // Higer quality waveforms
 static uint8_t hq_lighter_waveform[][13] = {
-  {1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3},
-  {1, 1, 1, 2, 3, 2, 2, 2, 3, 3, 2, 2, 2},
-  {2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 3, 2}
+  { 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3 },
+  { 1, 1, 1, 2, 3, 2, 2, 2, 3, 3, 2, 2, 2 },
+  { 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 3, 2 }
 };
 
 static uint8_t hq_darker_waveform[][13] = {
-  {1, 1, 3, 3, 1, 3, 3, 3, 1, 3, 1, 2, 2},
-  {3, 3, 3, 3, 1, 3, 3, 1, 1, 3, 1, 3, 3},
-  {1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 3, 1}
+  { 1, 1, 3, 3, 1, 3, 3, 3, 1, 3, 1, 2, 2 },
+  { 3, 3, 3, 3, 1, 3, 3, 1, 1, 3, 1, 3, 3 },
+  { 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 3, 1 }
 };
 
 
@@ -401,7 +395,7 @@ static uint8_t hq_darker_waveform[][13] = {
 // has finished, runs compact_pixels on this core, then hands off to the
 // dedicated paint task on core 0.
 // =============================================================================
-void EPD_Painter::paint(uint8_t* framebuffer) {
+void EPD_Painter::paint(uint8_t *framebuffer) {
   xSemaphoreTake(_paint_done_sem, portMAX_DELAY);
   epd_painter_compact_pixels(framebuffer, packed_fastbuffer, _config.width * _config.height);
   xSemaphoreGive(_paint_start_sem);
@@ -412,7 +406,7 @@ void EPD_Painter::paint(uint8_t* framebuffer) {
 // Runs on core 0. Waits for paint() to signal, then drives the EPD waveform.
 // =============================================================================
 void EPD_Painter::_paint_task_entry(void *arg) {
-  static_cast<EPD_Painter*>(arg)->_paint_task_body();
+  static_cast<EPD_Painter *>(arg)->_paint_task_body();
 }
 
 void EPD_Painter::_paint_task_body() {
@@ -455,12 +449,16 @@ void EPD_Painter::_paint_task_body() {
 
       for (int row = 0; row < _config.height; row++) {
         uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, darker_wf,  bitmask[row]);
+        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, darker_wf, bitmask[row]);
         epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, lighter_wf, ~bitmask[row]);
         sendRow(row == 0, false, false);
       }
 
-      delay(_config.latch_delay);
+      if (_config.quality == Quality::QUALITY_FAST) {
+        delay(1);
+      } else {
+        delay(4);
+      }
     }
 
     memset(dma_buffer1, 0x00, packed_row_bytes);
@@ -481,19 +479,19 @@ void EPD_Painter::_paint_task_body() {
 void EPD_Painter::clear() {
   PanelPowerGuard guard(*this);
   const int packed_row_bytes = _config.width / 4;
-  
-  memset(packed_fastbuffer,0x00,packed_row_bytes*_config.height);
 
-    const uint8_t *lt_wf;
-    int wf_len;
+  memset(packed_fastbuffer, 0x00, packed_row_bytes * _config.height);
 
-    if (_config.quality == Quality::QUALITY_HIGH) {
-        lt_wf = &hq_lighter_waveform[0][0];
-        wf_len = 13;
-    } else {
-        lt_wf = &lighter_waveform[0][0];
-        wf_len = 7;
-    }
+  const uint8_t *lt_wf;
+  int wf_len;
+
+  if (_config.quality == Quality::QUALITY_HIGH) {
+    lt_wf = &hq_lighter_waveform[0][0];
+    wf_len = 13;
+  } else {
+    lt_wf = &lighter_waveform[0][0];
+    wf_len = 7;
+  }
 
   for (int row = 0; row < _config.height; row++) {
     uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
@@ -501,19 +499,24 @@ void EPD_Painter::clear() {
     bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes, bitmask[row]);
   }
 
-  for (uint8_t pass = 0; pass <wf_len ; pass++) {
+  for (uint8_t pass = 0; pass < wf_len; pass++) {
     uint8_t lighter_wf[3] = {
-        (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[1 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[0 * wf_len + pass] * 0x55)
+      (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
+      (uint8_t)(lt_wf[1 * wf_len + pass] * 0x55),
+      (uint8_t)(lt_wf[0 * wf_len + pass] * 0x55)
     };
 
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-      epd_painter_convert_packed_fb_to_ink( fb_row , dma_buffer, packed_row_bytes,lighter_wf, bitmask[row]);
+      epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, lighter_wf, bitmask[row]);
       sendRow(row == 0);
     }
-    delay(_config.latch_delay);
+
+    if (_config.quality == Quality::QUALITY_FAST) {
+      delay(1);
+    } else {
+      delay(4);
+    }
   }
 
   for (int phase = 0; phase < 4; phase++) {
@@ -521,7 +524,7 @@ void EPD_Painter::clear() {
     memset(dma_buffer1, pattern, packed_row_bytes);
     memset(dma_buffer2, pattern, packed_row_bytes);
 
-    int totpass[] = {6,2,4,8,6,6,6,6};
+    int totpass[] = { 6, 2, 4, 8, 6, 6, 6, 6 };
 
     for (int passes = 0; passes < totpass[phase]; passes++) {
       for (int row = 0; row < _config.height; ++row) {

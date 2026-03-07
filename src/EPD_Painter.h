@@ -1,7 +1,6 @@
 #ifndef EPD_Painter_H
 #define EPD_Painter_H
 
-#include <Arduino.h>
 #include <esp_private/gdma.h>
 #include <hal/dma_types.h>
 #include "Wire.h"
@@ -38,7 +37,6 @@ struct PowerCtlConfig {
       int8_t pin_spv;
       int8_t pin_ckv;
       int8_t pin_le;
-      int8_t latch_delay;
       Quality quality;
       int8_t data_pins[8];
       I2CBusConfig i2c{};
