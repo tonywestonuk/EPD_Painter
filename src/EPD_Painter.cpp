@@ -503,8 +503,10 @@ void EPD_Painter::_paint_task_body() {
 
       if (_config.quality == Quality::QUALITY_FAST) {
         EPD_DELAY_MS(1);
-      } else {
+      } else if (_config.quality == Quality::QUALITY_NORMAL) {
         EPD_DELAY_MS(4);
+      } else {
+        EPD_DELAY_MS(7);
       }
     }
 
@@ -551,7 +553,7 @@ void EPD_Painter::clear() {
   paintStage=2;
   xSemaphoreGive(_paint_start_sem); 
 
-  delay(400);
+  delay(500);
 
   PanelPowerGuard guard(*this);
   const uint8_t *lt_wf;
