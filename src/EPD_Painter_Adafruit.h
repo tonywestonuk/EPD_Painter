@@ -61,6 +61,8 @@ public:
         
         memset(buffer,0x00,_config.width * _config.height);
 
+        _painter.setInterlaceMode(true);
+
         return _painter.begin();
     }
 

@@ -71,6 +71,9 @@ struct PowerCtlConfig {
   void clear();
   void paint(uint8_t* framebuffer);
   void paintLater(uint8_t* framebuffer);
+  void setInterlaceMode(bool mode){
+    interlace_mode = mode;
+  }
 
 
   void setQuality(Quality quality);
@@ -105,7 +108,7 @@ private:
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
-  bool interlace_period = false;
+  bool interlace_mode = false;
   bool shouldSkipRow = false;
 
   // ---- Internal helpers ----

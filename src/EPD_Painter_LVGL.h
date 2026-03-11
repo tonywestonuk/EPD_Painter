@@ -71,6 +71,8 @@ public:
 
         if (!_painter.begin()) return false;
 
+        _painter.setInterlaceMode(true);
+
         // Register with LVGL — FULL mode means flush_cb is called once per
         // frame with the complete buffer, ideal for eInk.
         _disp = lv_display_create(_painter.getConfig().width, _painter.getConfig().height);

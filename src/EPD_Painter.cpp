@@ -411,11 +411,11 @@ static uint8_t hq_darker_waveform[][13] = {
 void EPD_Painter::paint(uint8_t *framebuffer) {
   xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
   epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
-  paintStage=2;
+  paintStage=(interlace_mode?3:2);
   xSemaphoreGive(_paint_buffer_sem); 
 
   // wait until this buffer has been picked up by the paint loop.
-  while(paintStage==2){
+  while(paintStage==(interlace_mode?3:2)){
       vTaskDelay(1);
   }
 }
@@ -426,7 +426,7 @@ void EPD_Painter::paint(uint8_t *framebuffer) {
 void EPD_Painter::paintLater(uint8_t *framebuffer) {
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
     epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
-    paintStage=2;
+    paintStage=interlace_mode?3:2;
     xSemaphoreGive(_paint_buffer_sem); 
 }
 
@@ -458,7 +458,13 @@ void EPD_Painter::_paint_task_body() {
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
       uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
-      bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  0xffffffff);
+
+
+      if (interlace_mode){
+          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
+      } else {
+          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  0xffffffff);
+      }
     }
 
     const uint8_t *lt_wf;
