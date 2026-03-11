@@ -111,6 +111,7 @@ private:
   bool interlace_mode = false;
   bool shouldSkipRow = false;
 
+
   // ---- Internal helpers ----
   void powerOn();
   void powerOff();
