@@ -100,41 +100,38 @@ void EPD_Painter::setQuality(Quality quality) {
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
 
-  // Wait for last to complete..
+  // Wait for LCD peripheral to finish consuming the previous row.
+  // This also guarantees the previously-started DMA transfer is complete,
+  // since the LCD FIFO cannot drain faster than DMA fills it.
   while (LCD_CAM.lcd_user.lcd_start) {
     EPD_YIELD();
   }
 
-  if (firstLine) {
-    // Reset to top of page
-    gpio_clear_fast(_config.pin_spv);
-    gpio_clear_fast(_config.pin_ckv);
-
+  // dma_buffer points at the buffer the CPU just finished writing.
+  // Start DMA on its matching descriptor, then swap so the next
+  // convert_packed_fb_to_ink() writes into the now-idle buffer.
+  dma_descriptor_t *desc;
   if (dma_buffer == dma_buffer1) {
-    gdma_start(dma_chan, (intptr_t)&dma_desc1);
+    desc = &dma_desc1;
     dma_buffer = dma_buffer2;
   } else {
-    gdma_start(dma_chan, (intptr_t)&dma_desc2);
+    desc = &dma_desc2;
     dma_buffer = dma_buffer1;
   }
-  
+
+  if (firstLine) {
+    gpio_clear_fast(_config.pin_spv);
+    gpio_clear_fast(_config.pin_ckv);
+    gdma_start(dma_chan, (intptr_t)desc);
     gpio_set_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_spv);
   } else {
     gpio_clear_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_le);
-
-  if (dma_buffer == dma_buffer1) {
-    gdma_start(dma_chan, (intptr_t)&dma_desc1);
-    dma_buffer = dma_buffer2;
-  } else {
-    gdma_start(dma_chan, (intptr_t)&dma_desc2);
-    dma_buffer = dma_buffer1;
-  }
+    gdma_start(dma_chan, (intptr_t)desc);
     gpio_clear_fast(_config.pin_le);
     gpio_set_fast(_config.pin_ckv);
   }
-
 
   LCD_CAM.lcd_user.lcd_start = 1;
 
@@ -142,7 +139,6 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     while (LCD_CAM.lcd_user.lcd_start) {
       EPD_YIELD();
     }
-
     gpio_clear_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_le);
     EPD_DELAY_US(1);
@@ -312,8 +308,10 @@ bool EPD_Painter::begin() {
 
   if (!(dma_buffer && packed_fastbuffer && packed_screenbuffer)) return false;
 
-  _paint_start_sem = xSemaphoreCreateBinary();
-  xSemaphoreGive(_paint_start_sem);  // available immediately so first paint() doesn't block
+  _paint_active_sem = xSemaphoreCreateBinary();
+  xSemaphoreGive(_paint_active_sem); 
+  _paint_buffer_sem = xSemaphoreCreateBinary();
+  xSemaphoreGive(_paint_buffer_sem); 
 
   xTaskCreatePinnedToCore(
     _paint_task_entry, "epd_paint", 8000, this, 10, &_paint_task_h, 0);
@@ -329,10 +327,9 @@ bool EPD_Painter::end() {
     vTaskDelete(_paint_task_h);
     _paint_task_h = nullptr;
   }
-  if (_paint_start_sem) {
-    vSemaphoreDelete(_paint_start_sem);
-    _paint_start_sem = nullptr;
-  }
+
+  vSemaphoreDelete(_paint_active_sem);
+  vSemaphoreDelete(_paint_buffer_sem);
 
   if (dma_chan) {
     gdma_disconnect(dma_chan);
@@ -412,19 +409,14 @@ static uint8_t hq_darker_waveform[][13] = {
 // paint()
 // =============================================================================
 void EPD_Painter::paint(uint8_t *framebuffer) {
-  
-  for(;;){
-    xSemaphoreTake(_paint_start_sem, portMAX_DELAY);
-    if (paintStage==2){
-      xSemaphoreGive(_paint_start_sem);
-      vTaskDelay(1);
-      continue;
-    }
+  xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
+  epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
+  paintStage=2;
+  xSemaphoreGive(_paint_buffer_sem); 
 
-    epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
-    paintStage=2;
-    xSemaphoreGive(_paint_start_sem);
-    break;
+  // wait until this buffer has been picked up by the paint loop.
+  while(paintStage==2){
+      vTaskDelay(1);
   }
 }
 
@@ -432,10 +424,10 @@ void EPD_Painter::paint(uint8_t *framebuffer) {
 // paintLater
 // =============================================================================
 void EPD_Painter::paintLater(uint8_t *framebuffer) {
-    xSemaphoreTake(_paint_start_sem, portMAX_DELAY); 
+    xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
     epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
     paintStage=2;
-    xSemaphoreGive(_paint_start_sem); 
+    xSemaphoreGive(_paint_buffer_sem); 
 }
 
 // =============================================================================
@@ -447,17 +439,19 @@ void EPD_Painter::_paint_task_entry(void *arg) {
 
 void EPD_Painter::_paint_task_body() {
   for (;;) {
-    xSemaphoreTake(_paint_start_sem, portMAX_DELAY);
     if (paintStage==0){
-      xSemaphoreGive(_paint_start_sem);
-      vTaskDelay(1);
-      continue;
-    }  else {
-      memcpy(packed_fastbuffer, packed_paintbuffer, packed_row_bytes*_config.height);
-      paintStage-=1;
-      xSemaphoreGive(_paint_start_sem);
+      xSemaphoreGive(_paint_active_sem);
+      while(paintStage==0){
+         vTaskDelay(1);
+      }
+      xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
     }
 
+    xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+    memcpy(packed_fastbuffer, packed_paintbuffer, packed_row_bytes*_config.height);
+    xSemaphoreGive(_paint_buffer_sem);
+
+    paintStage-=1;
   
     PanelPowerGuard guard(*this);
 
@@ -515,8 +509,6 @@ void EPD_Painter::_paint_task_body() {
       sendRow(row == 0, row == _config.height - 1);
     }
 
-    interlace_period = !interlace_period;
-
   }
 }
 
@@ -527,32 +519,18 @@ void EPD_Painter::clear() {
 
   const int packed_row_bytes = _config.width / 4;
 
-  // for(;;){
-  //   xSemaphoreTake(_paint_start_sem, portMAX_DELAY);
-  // //  memset(packed_paintbuffer, 0x00, packed_row_bytes * _config.height);
-
-  //   if (paintStage==2){
-  //     xSemaphoreGive(_paint_start_sem);
-  //     vTaskDelay(1);
-  //     continue;
-  //   }
-
-  //   paintStage=2;
-  //   xSemaphoreGive(_paint_start_sem);
-  //   break;
-  // }
-
-  // // Wait till it hits the screen.
-  // while (paintStage!=0){
-  //   EPD_DELAY_MS(1);
-  // }
-
-  xSemaphoreTake(_paint_start_sem, portMAX_DELAY); 
+  // First paint it white.
+  xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
   memset(packed_paintbuffer, 0x00, packed_row_bytes * _config.height);
-  paintStage=2;
-  xSemaphoreGive(_paint_start_sem); 
+  paintStage=1;  /// only needs 1 pass.
+  xSemaphoreGive(_paint_buffer_sem); 
 
-  delay(500);
+  while (paintStage==1){
+    vTaskDelay(1);  // Wait until paintloop starts up again
+  }
+
+  // Wait until paintloop is idle.. By taking it, prevents paint loop from starting again.
+  xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
 
   PanelPowerGuard guard(*this);
   const uint8_t *lt_wf;
@@ -565,8 +543,6 @@ void EPD_Painter::clear() {
     lt_wf = &lighter_waveform[0][0];
     wf_len = 7;
   }
-
-
 
   // Send clear
   for (int phase = 0; phase < 4; phase++) {
@@ -590,6 +566,9 @@ void EPD_Painter::clear() {
   for (int row = 0; row < _config.height; ++row) {
     sendRow(row == 0, row == _config.height - 1);
   }
+
+  
+  xSemaphoreGive(_paint_active_sem); 
 
 
 }

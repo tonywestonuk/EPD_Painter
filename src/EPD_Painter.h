@@ -5,9 +5,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include <atomic>
+
 
 #include <esp_private/gdma.h>
 #include <hal/dma_types.h>
+#include <esp_intr_alloc.h>
 
 // I2C — TwoWire for Arduino, ESP-IDF master API otherwise
 #ifdef ARDUINO
@@ -82,6 +85,11 @@ private:
   gdma_channel_handle_t dma_chan = nullptr;
   dma_descriptor_t      dma_desc1 = {};
   dma_descriptor_t      dma_desc2 = {};
+  intr_handle_t         _lcd_intr_handle = nullptr;
+  volatile TaskHandle_t _dma_notify_task = nullptr;
+  bool                  _dma_pending = false;
+
+  static void IRAM_ATTR _lcd_isr(void *arg);
 
   // ---- Buffers ----
 
@@ -96,7 +104,7 @@ private:
   uint32_t* bitmask = nullptr;
 
   int packed_row_bytes = 0;
-  int paintStage = 0;
+  std::atomic<int> paintStage{0};
   bool interlace_period = false;
   bool shouldSkipRow = false;
 
@@ -106,8 +114,8 @@ private:
   void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
 
   // ---- Dual-core paint task ----
-  SemaphoreHandle_t _paint_start_sem = nullptr;  // signals task to start
-  SemaphoreHandle_t _paint_done_sem  = nullptr;  // signals task has finished
+  SemaphoreHandle_t _paint_active_sem = nullptr;  // signals task to start
+  SemaphoreHandle_t _paint_buffer_sem  = nullptr;  // signals task has finished
   TaskHandle_t      _paint_task_h    = nullptr;
 
   static void _paint_task_entry(void *arg);
