@@ -3,6 +3,7 @@
 #include <cstring>
 #include "build_opt.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_gpio.h"
 #include <driver/periph_ctrl.h>
@@ -10,6 +11,7 @@
 #include <hal/dma_types.h>
 #include <hal/gpio_hal.h>
 #include <soc/lcd_cam_struct.h>
+#include <soc/gdma_struct.h>
 #include "EPD_Painter.h"
 #include <epd_painter_powerctl.h>
 #include "epd_painter_shutdown.h"
@@ -104,13 +106,15 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   // Wait for LCD peripheral to finish consuming the previous row.
   // This also guarantees the previously-started DMA transfer is complete,
   // since the LCD FIFO cannot drain faster than DMA fills it.
-  while (LCD_CAM.lcd_user.lcd_start) {
-    EPD_YIELD();
-  }
+  //long count=0;
+  while (LCD_CAM.lcd_user.lcd_start) {}
+  //printf("yielded %d \n",count);
+  //delayMicroseconds(4);
 
   // dma_buffer points at the buffer the CPU just finished writing.
   // Start DMA on its matching descriptor, then swap so the next
   // convert_packed_fb_to_ink() writes into the now-idle buffer.
+  //delayMicroseconds(10);
   dma_descriptor_t *desc;
   if (dma_buffer == dma_buffer1) {
     desc = &dma_desc1;
@@ -123,23 +127,33 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   if (firstLine) {
     gpio_clear_fast(_config.pin_spv);
     gpio_clear_fast(_config.pin_ckv);
-    gdma_start(dma_chan, (intptr_t)desc);
+    EPD_DELAY_US(1);
     gpio_set_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_spv);
   } else {
-    gpio_clear_fast(_config.pin_ckv);
+
     gpio_set_fast(_config.pin_le);
-    gdma_start(dma_chan, (intptr_t)desc);
     gpio_clear_fast(_config.pin_le);
+
+
+    gpio_clear_fast(_config.pin_ckv);
+    EPD_DELAY_US(1);
     gpio_set_fast(_config.pin_ckv);
+
+
   }
 
-  LCD_CAM.lcd_user.lcd_start = 1;
+  // Reset ownership, flush AFIFO, and restart GDMA from the correct descriptor.
+  // This prevents free-running DMA from preloading the next buffer into the AFIFO
+  // before the CPU has written new row data there (which caused left-side artifacts).
+  desc->dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
+  LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
+  gdma_start(dma_chan, (intptr_t)desc);
 
+  LCD_CAM.lcd_user.lcd_start = 1;
   if (lastLine) {
-    while (LCD_CAM.lcd_user.lcd_start) {
-      EPD_YIELD();
-    }
+    while (LCD_CAM.lcd_user.lcd_start) {}
+
     gpio_clear_fast(_config.pin_ckv);
     gpio_set_fast(_config.pin_le);
     EPD_DELAY_US(1);
@@ -250,6 +264,13 @@ bool EPD_Painter::begin() {
   gdma_new_channel(&dma_chan_config, &dma_chan);
   gdma_connect(dma_chan, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_LCD, 0));
 
+  // Cache the GDMA channel index for direct register access in sendRow().
+  // LCD_CAM is peripheral 5 in the GDMA peri_sel register.
+  _dma_channel_id = 0;
+  for (int i = 0; i < 5; i++) {
+    if (GDMA.channel[i].out.peri_sel.sel == 5) { _dma_channel_id = i; break; }
+  }
+
   gdma_strategy_config_t strategy_config = {
     .owner_check = false,
     .auto_update_desc = false,
@@ -264,24 +285,20 @@ bool EPD_Painter::begin() {
 
   dma_buffer = dma_buffer1;
 
-  // ---- Set up circular DMA descriptor chain ----
+  // ---- Set up DMA descriptors (one per buffer, stopped after each row) ----
   dma_desc2.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
   dma_desc2.dw0.suc_eof = 1;
   dma_desc2.dw0.size = packed_row_bytes;
   dma_desc2.dw0.length = packed_row_bytes;
   dma_desc2.buffer = const_cast<uint8_t *>(dma_buffer2);
+  dma_desc2.next = nullptr;
 
   dma_desc1.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
   dma_desc1.dw0.suc_eof = 1;
   dma_desc1.dw0.size = packed_row_bytes;
   dma_desc1.dw0.length = packed_row_bytes;
   dma_desc1.buffer = const_cast<uint8_t *>(dma_buffer1);
-
   dma_desc1.next = nullptr;
-  dma_desc2.next = nullptr;
-
-  LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
-  gdma_start(dma_chan, (intptr_t)&dma_desc1);
 
   // ---- Allocate packed 2bpp framebuffers ----
   const size_t packed_size = (_config.width * _config.height) / 4;
@@ -295,7 +312,7 @@ bool EPD_Painter::begin() {
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
   bitmask = static_cast<uint32_t *>(
-    heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_SPIRAM));
+    heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
 
   // ── If a TPS chip is present, initialise the power controller ──
   if (_config.power.tps_addr != -1) {
@@ -396,15 +413,15 @@ static uint8_t darker_waveform[][7] = {
 
 // Higer quality waveforms
 static uint8_t hq_lighter_waveform[][13] = {
-  { 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3 },
-  { 1, 1, 2, 2, 3, 2, 2, 2, 3, 3, 2, 2, 2 },
-  { 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 3, 2 }
+  { 1, 1, 3, 1, 2, 2, 2, 1, 2, 2, 2, 2, 3 },
+  { 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3 },
+  { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 }
 };
 
 static uint8_t hq_darker_waveform[][13] = {
-  { 1, 1, 3, 3, 1, 3, 3, 3, 1, 3, 1, 2, 2 },
-  { 3, 3, 3, 1, 1, 3, 3, 1, 1, 3, 1, 3, 3 },
-  { 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 3, 1 }
+  { 1, 3, 2, 2, 1, 2, 1, 1, 2, 1, 1, 1, 3 },
+  { 3, 3, 1, 1, 1, 3, 3, 1, 1, 3, 1, 3, 3 },
+  { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 };
 
 
@@ -505,14 +522,14 @@ void EPD_Painter::_paint_task_body() {
     const uint8_t *dk_wf;
     int wf_len;
 
-    if (_config.quality == Quality::QUALITY_HIGH) {
-      lt_wf = &hq_lighter_waveform[0][0];
-      dk_wf = &hq_darker_waveform[0][0];
-      wf_len = 13;
-    } else {
+    if (_config.quality == Quality::QUALITY_FAST) {
       lt_wf = &lighter_waveform[0][0];
       dk_wf = &darker_waveform[0][0];
       wf_len = 7;
+    } else {
+      lt_wf = &hq_lighter_waveform[0][0];
+      dk_wf = &hq_darker_waveform[0][0];
+      wf_len = 13;
     }
 
     for (uint8_t pass = 0; pass < wf_len; pass++) {
@@ -534,14 +551,13 @@ void EPD_Painter::_paint_task_body() {
         sendRow(row == 0, false, false);
       }
 
-      if (_config.quality == Quality::QUALITY_FAST) {
-        EPD_DELAY_MS(1);
-      } else if (_config.quality == Quality::QUALITY_NORMAL) {
-        EPD_DELAY_MS(4);
-      } else {
-        EPD_DELAY_MS(6);
+     if (_config.quality == Quality::QUALITY_HIGH) {
+        EPD_DELAY_MS(2);
+
       }
     }
+
+    vTaskDelay(1);  // yield once per frame: feeds WDT and lets application task run
 
     memset(dma_buffer1, 0x00, packed_row_bytes);
     memset(dma_buffer2, 0x00, packed_row_bytes);

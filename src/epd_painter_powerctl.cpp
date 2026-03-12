@@ -95,7 +95,17 @@ bool epd_painter_powerctl::powerOn() {
   if (!tpsWrite(TPS_UPSEQ1, 0xAA)) return false;
   if (!tpsWrite(TPS_ENABLE, 0x3F)) return false;
 
-  setVcomMv(config.power.vcom_mv);
+  // Dont set vcomm... this chip should already konow it. 
+  //setVcomMv(config.power.vcom_mv);
+
+  uint8_t val = 0;
+  tpsRead(TPS_VCOM1, val);
+  
+  printf("[PWRCTL] Reading TPS VCOM1... %d \n", val);
+  tpsRead(TPS_VCOM2, val);
+  printf("[PWRCTL] Reading TPS VCOM2... %d \n", val);
+
+
 
   printf("[PWRCTL] Waiting for TPS PG...");
   timeout = 0;
@@ -146,6 +156,10 @@ uint8_t epd_painter_powerctl::readPcaPort(uint8_t port) {
   return val;
 }
 
+
+// This is a bad function.  
+// The spec sheet does not match this...in parrticular, the hi register has a set of control bits.
+// DO NOT USE
 void epd_painter_powerctl::setVcomMv(int vcom_mv) {
   int mag = vcom_mv < 0 ? -vcom_mv : vcom_mv;
   mag /= 10;

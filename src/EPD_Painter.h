@@ -89,6 +89,7 @@ struct PowerCtlConfig {
 private:
   // ---- LCD_CAM / DMA ----
   gdma_channel_handle_t dma_chan = nullptr;
+  int                   _dma_channel_id = 0;
   dma_descriptor_t      dma_desc1 = {};
   dma_descriptor_t      dma_desc2 = {};
   intr_handle_t         _lcd_intr_handle = nullptr;

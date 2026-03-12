@@ -144,119 +144,208 @@ epd_painter_compact_pixels:
 
 
 
+
 // =============================================================================
-// epd_painter_convert_packed_fb_to_ink
+// epd_painter_convert_packed_fb_to_ink  [OPTIMISED]
 //
 // Converts packed 2bpp framebuffer into "ink" drive format for one
 // waveform pass. Only processes 64-pixel chunks whose corresponding
 // bit is set in the chunk_flags parameter.
 //
-// When writing output, existing non-zero data in the output buffer is
-// preserved — only pixels that are currently 00 in the output are written.
-// This allows two calls (one for lighten waveforms, one for darken) to
-// accumulate into the same output buffer without overwriting each other.
-//
 // Parameters:
 //   a2 - Input pointer  (packed 2bpp framebuffer row)
-//   a3 - Output pointer (ink drive data — may contain data from prior call)
+//   a3 - Output pointer (ink drive data)
 //   a4 - Length in bytes (packed row size, multiple of 16)
 //   a5 - Pointer to 3-byte waveform entry for this pass
 //   a6 - chunk_flags (1 bit per 64-pixel chunk, MSB = first chunk;
 //         bit=1 means process this chunk, bit=0 means skip)
 //
-// Registers used:
-//   a7  - Constant 1 (for SAR shift amount)
-//   a9  - Scratch for flag testing
-//   a10 - Scratch
-//   q0  - Input pixel data / existing output for merge
-//   q1  - Intermediate / pixel sub-masks
-//   q2  - Shifted copy for mask spreading
-//   q3  - Waveform output for this chunk
-//   q4  - Waveform for pixel value 11 (broadcast)
-//   q5  - Waveform for pixel value 10 (broadcast)
-//   q6  - Waveform for pixel value 01 (broadcast)
-//   q7  - Mask: 0x55 = 01010101 (isolates low bit of each 2bpp pixel)
+// Register allocation:
+//   a6  - chunk_flags shift register (consumed MSB-first via slli)
+//   a7  - SAR constant (1) — written once, never changed
+//   a9  - chunk flag bit extracted each iteration
+//   a10 - scratch
+//   q0  - loaded input pixels / scratch during mask derivation / mask_10 spread
+//   q1  - scratch (mask_11 single-bit, then spread; reused for spread temps)
+//   q2  - hi sub-mask / mask_01
+//   q3  - lo sub-mask (borrowed) / output accumulator
+//   q4  - waveform for pixel value 11 (broadcast, set once)
+//   q5  - waveform for pixel value 10 (broadcast, set once)
+//   q6  - waveform for pixel value 01 (broadcast, set once)
+//   q7  - constant 0x55 mask (broadcast, set once, NEVER modified in loop)
+//
+// Optimisations over original:
+//
+//   1. PARALLEL MASK DERIVATION
+//      The original derived pixel-class masks serially using XOR to
+//      subtract already-handled pixels, creating a dependency chain:
+//        mask_11 → xor → mask_10 → (implied) → mask_01
+//      The new approach splits q0 into independent hi/lo sub-masks up
+//      front and derives all three class masks with no inter-dependencies:
+//        lo  = q0 & 0x55
+//        hi  = (q0 >> 1) & 0x55
+//        m11 = lo & hi          (independent)
+//        m10 = hi & ~lo         (independent)
+//        m01 = lo & ~hi         (independent)
+//      The LX7 PIE unit issues up to 2 vector ops/cycle; with no hazards
+//      between these three derivations the pipeline can overlap them.
+//
+//   2. ELIMINATED q7 TOGGLE
+//      The original temporarily flipped q7 between 0x55 and 0xAA using
+//      two ee.notq instructions to isolate the high bit of each pixel
+//      pair. This created a false RAW dependency on q7. The new code
+//      uses ee.notq on a scratch register (q0) instead, leaving q7
+//      permanently 0x55 with no hazard.
+//
+//   3. ELIMINATED ee.zero.q
+//      The original zeroed q3 before accumulating. The first waveform
+//      term now initialises q3 directly (ee.andq q3, q4, q3) so the
+//      zero instruction is gone.
+//
+//   4. REGISTER BORROWING FOR lo
+//      q3 (the output register) holds the lo sub-mask temporarily while
+//      all three class masks are derived, then is overwritten with the
+//      first waveform output. This keeps all mask derivations live at
+//      the same time within the 8-register file without spilling.
+//
+// Cycle estimate (active chunk, 2-wide issue, no cache misses):
+//   Original: ~15+ cycles (serial XOR chain limits ILP)
+//   Optimised: ~10 cycles  (parallel mask derivation, no false deps)
 // =============================================================================
+    .text
+    .align 4
     .global epd_painter_convert_packed_fb_to_ink
     .type   epd_painter_convert_packed_fb_to_ink, @function
-    .align 4
 
 epd_painter_convert_packed_fb_to_ink:
-    entry           a1, 32
+    entry       a1, 32
 
-    movi            a7, 1
-    wsr.sar         a7
+    // SAR = 1 for ee.vsr.32 / ee.vsl.32 (shift by 1 bit within 32-bit lanes)
+    movi        a7, 1
+    wsr.sar     a7
 
-    // Build 0x55 mask broadcast to all bytes of q7
-    movi            a10, 0b01010101
-    s32i            a10, a1, 0
-    ee.vldbc.8      q7, a1
+    // Build q7 = [0x55 0x55 ... 0x55] (16 bytes)
+    // 0x55 = 0b01010101 — isolates the low bit of each 2bpp pixel pair
+    // q7 is NEVER modified inside the loop.
+    movi        a10, 0b01010101
+    s32i        a10, a1, 0
+    ee.vldbc.8  q7, a1
 
-    // Load and broadcast the 3 waveform bytes
-    ee.vldbc.8.ip   q4, a5, 1          // waveform for 11 pixels
-    ee.vldbc.8.ip   q5, a5, 1          // waveform for 10 pixels
-    ee.vldbc.8.ip   q6, a5, 1          // waveform for 01 pixels
+    // Broadcast the 3 waveform bytes from the waveform entry pointer (a5).
+    // q4 = drive pattern for pixel value 11 (both bits set   → darkest)
+    // q5 = drive pattern for pixel value 10 (high bit only   → dark grey)
+    // q6 = drive pattern for pixel value 01 (low  bit only   → light grey)
+    ee.vldbc.8.ip   q4, a5, 1
+    ee.vldbc.8.ip   q5, a5, 1
+    ee.vldbc.8.ip   q6, a5, 1
+
+    // -------------------------------------------------------------------------
+    // Main loop — one iteration per 16-byte chunk (64 pixels)
+    // -------------------------------------------------------------------------
 
 .convert_loop:
 
-    // --- Check flag for this 64-pixel chunk ---
-    extui           a9, a6, 31, 1
-    slli            a6, a6, 1
+    // Extract the MSB of chunk_flags into a9 (1 = process, 0 = skip),
+    // then shift flags left so the next bit is ready for the next iteration.
+    extui       a9, a6, 31, 1
+    slli        a6, a6, 1
 
-    beqz            a9, .convert_skip
+    beqz        a9, .convert_skip
 
-    // --- Process this chunk ---
-    ee.vld.128.ip   q0, a2, 16
+    // =========================================================================
+    // ACTIVE CHUNK: derive pixel-class masks and apply waveforms
+    // =========================================================================
 
-    ee.zero.q       q3
+    ee.vld.128.ip   q0, a2, 16      // load 16 packed bytes (64 pixels)
 
-    // ----- Handle pixels with value 11 (both bits set) -----
-    ee.vsr.32       q1, q0
-    ee.andq         q1, q1, q7
-    ee.andq         q1, q0, q1
-    ee.vsl.32       q2, q1
-    ee.orq          q1, q1, q2
+    // ------------------------------------------------------------------
+    // Step 1: split into independent lo and hi sub-masks.
+    //
+    //   q3 = lo = q0 & 0x55   — bit 0 of each pixel pair, in-place
+    //   q2 = hi = (q0>>1)&0x55 — bit 1 of each pixel pair, shifted to bit 0
+    //
+    // q3 is borrowed here as a temporary to hold lo. It will be
+    // overwritten with the waveform output before the end of the block.
+    // ------------------------------------------------------------------
+    ee.andq         q3, q0, q7          // q3 = lo  (bit 0 of each pixel pair)
+    ee.vsr.32       q2, q0              // q2 = q0 >> 1
+    ee.andq         q2, q2, q7          // q2 = hi  (bit 1 shifted into bit 0)
 
-    ee.andq         q2, q4, q1
-    ee.orq          q3, q3, q2
+    // ------------------------------------------------------------------
+    // Step 2: derive all three single-bit class masks.
+    //
+    // Each mask has a 1 in the lo-bit position for matching pixels,
+    // and 0 everywhere else. No dependency between q1, q0, q2 derivations.
+    //
+    //   q1 = mask_11 = lo & hi          pixels where both bits were 1
+    //   q0 = mask_10 = hi & ~lo         pixels where only the high bit was 1
+    //   q2 = mask_01 = lo & ~hi         pixels where only the low  bit was 1
+    // ------------------------------------------------------------------
+    ee.andq         q1, q3, q2          // q1 = mask_11 = lo & hi
 
-    // ----- Handle pixels with value 10 -----
-    ee.xorq         q0, q0, q1
+    ee.notq         q0, q3              // q0 = ~lo
+    ee.andq         q0, q2, q0          // q0 = mask_10 = hi & ~lo
 
-    ee.notq         q7, q7             // q7 = 0xAA temporarily
-    ee.andq         q1, q0, q7
-    ee.notq         q7, q7             // restore q7 = 0x55
+    ee.notq         q2, q2              // q2 = ~hi  (hi no longer needed)
+    ee.andq         q2, q3, q2          // q2 = mask_01 = lo & ~hi
+                                        // (q3=lo is still valid here)
 
-    ee.vsr.32       q2, q1
-    ee.orq          q1, q1, q2
+    // ------------------------------------------------------------------
+    // Step 3: spread each single-bit mask across both bits of its pixel
+    // pair, so the mask covers the full 2-bit field for each pixel.
+    //
+    //   spread(m) = m | (m << 1)   within each 32-bit lane
+    //
+    // After spreading:
+    //   q1 = mask_11 covering both bit positions of each 11-pixel
+    //   q0 = mask_10 covering both bit positions of each 10-pixel
+    //   q2 = mask_01 covering both bit positions of each 01-pixel
+    // ------------------------------------------------------------------
 
-    ee.andq         q2, q5, q1
-    ee.orq          q3, q3, q2
+    // spread mask_11 (into q3 directly — this overwrites the borrowed lo)
+    ee.vsl.32       q3, q1              // q3 = mask_11 << 1
+    ee.orq          q3, q3, q1          // q3 = mask_11 spread (both bits)
 
-    // ----- Handle pixels with value 01 -----
-    ee.andq         q1, q0, q7
-    ee.vsl.32       q2, q1
-    ee.orq          q1, q1, q2
+    // spread mask_10 in place
+    ee.vsl.32       q1, q0              // q1 = mask_10 << 1  (q1 now free)
+    ee.orq          q0, q0, q1          // q0 = mask_10 spread
 
-    ee.andq         q2, q6, q1
-    ee.orq          q3, q3, q2
+    // spread mask_01 in place
+    ee.vsl.32       q1, q2              // q1 = mask_01 << 1
+    ee.orq          q2, q2, q1          // q2 = mask_01 spread
 
-    // --- write to output ---
+    // ------------------------------------------------------------------
+    // Step 4: AND each spread mask with its waveform byte, then OR all
+    // three terms into the output register q3.
+    //
+    // The three ee.andq ops have no dependencies on each other; the
+    // pipeline can overlap them.
+    // ------------------------------------------------------------------
+    ee.andq         q3, q4, q3          // q3  = waveform_11 where pixel==11
+                                        //       (initialises output — no zero needed)
+    ee.andq         q0, q5, q0          // q0  = waveform_10 where pixel==10
+    ee.orq          q3, q3, q0          // accumulate
 
-    ee.vst.128.ip   q3, a3, 16
+    ee.andq         q2, q6, q2          // q2  = waveform_01 where pixel==01
+    ee.orq          q3, q3, q2          // accumulate → q3 = final ink output
+
+    ee.vst.128.ip   q3, a3, 16          // write 16 bytes of ink data, advance
 
     j               .convert_next
 
+    // =========================================================================
+    // SKIPPED CHUNK: advance both pointers without processing
+    // =========================================================================
 .convert_skip:
-    // Skip: advance pointers without processing
-    addi            a2, a2, 16
-    addi            a3, a3, 16
+    addi        a2, a2, 16
+    addi        a3, a3, 16
 
 .convert_next:
-    addi            a4, a4, -16
-    bnez            a4, .convert_loop
+    addi        a4, a4, -16
+    bnez        a4, .convert_loop
 
     retw.n
+
 
 // =============================================================================
 // epd_painter_ink_on
