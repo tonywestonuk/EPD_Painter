@@ -44,7 +44,9 @@ On top of that:
 ## Quick start
 
 ```cpp
-#define EPD_PAINTER_PRESET_M5PAPER_S3
+// Uncomment the define that matches your board.
+//#define EPD_PAINTER_PRESET_M5PAPER_S3
+//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
 #include "EPD_Painter_presets.h"
 #include "EPD_Painter_Adafruit.h"
 
