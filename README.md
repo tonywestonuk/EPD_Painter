@@ -116,8 +116,11 @@ For the LVGL binding, use the provided colour constants (`EPD_PainterLVGL::WHITE
 
 ## Shutdown handling.
 
-The device will power off, by pressing the reset button. 
-When the device powers off, EPD_Painter displays a static image stored in LittleFS at:
+EPD_Painter checks a 'shutdown flag' on initalisation. When the device is reset (either by software, or pressing the reset button), if this is set to shutdown, it will begin a shutdown sequence:
+- The Existing image is erased. (Image data stored in PSRAM data survives reset)
+- The screen is cleared
+- 
+- When the device powers off, EPD_Painter displays a static image stored in LittleFS at:
 
 ```
 /.epd_painter_shutdown.img
