@@ -129,11 +129,12 @@ If the flag is set to startup normally, then:
 
 If the file is not present, a Mandelbrot fractal is generated as a fallback. The file format is raw 2bpp packed pixels — 4 pixels per byte, `00`=white through `11`=black — matching the driver's internal format.
 
-Convert a PNG with ImageMagick:
+You can create your own shutdown screen by using ImageMagick, as follows. Once created upload it to your device's little_fs partition.
+
 ```bash
 convert input.png -resize 960x540! -colorspace Gray \
   -posterize 4 -negate -depth 2 -type Grayscale \
-  gray:shutdown.img
+  gray:.epd_painter_shutdown.img
 ```
 
 ---
