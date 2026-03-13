@@ -13,7 +13,7 @@ Most ESP32-S3 e-paper drivers use the standard `esp_lcd_panel_io_i80` interface 
 On top of that:
 
 - **ESP32-S3 vector (SIMD) assembly** — pixel packing, waveform conversion, and delta detection are done 64 pixels at a time using 128-bit vector registers
-- **Delta updates** — only pixels that have changed since the last frame are driven, keeping refresh times short even for large screens
+- **Delta updates** — only pixels that have changed since the last frame are driven.
 - **Dual-core pipeline** — the second waveform pass runs on the background core while your code continues on the main core
 - **4-shade greyscale** (white, light grey, dark grey, black) — the 2bpp pixel format maps directly onto the EPD waveform encoding with minimal conversion, keeping the pipeline fast
 
@@ -136,14 +136,13 @@ convert input.png -resize 960x540! -colorspace Gray \
 | Example | Binding | Description |
 |---|---|---|
 | `adafruit/bounce` | Adafruit GFX | Bouncing ball animation |
-| `adafruit/breakout` | Adafruit GFX | Playable Breakout game |
+| `adafruit/breakout` | Adafruit GFX | A breakout game animation |
 | `adafruit/circles` | Adafruit GFX | Animated circles |
 | `adafruit/page_text` | Adafruit GFX | Text rendering |
 | `lvgl/lvgl_hello_world` | LVGL | Minimal LVGL setup |
 | `lvgl/lvgl_gps_clock` | LVGL | GPS-synced clock (LilyGo) |
 | `lvgl/lvgl_gps_receiver` | LVGL | Live GPS data display (LilyGo) |
 | `lvgl/lvgl_lighting_control` | LVGL | UI control panel demo |
-| `lvgl/pixel_post_controller` | LVGL | Pixel art post controller |
 | `other/elevated` | Raw | ESP32 port of the Elevated 4K intro |
 | `other/drift` | Raw | Julia set morphing animation |
 | `other/gps_raw_serial` | Raw | Raw NMEA output from u-blox GPS (LilyGo) |
