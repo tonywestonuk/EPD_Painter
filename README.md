@@ -2,7 +2,7 @@
 
 # EPD_Painter
 
-A high-performance e-paper display driver for ESP32-S3, targeting the **M5Stack M5PaperS3** and **LilyGo T5 S3 GPS**. Achieves ~70fps equivalent update rates through a combination of ESP32-S3 vector (SIMD) assembly, a custom LCD_CAM DMA pipeline, and a delta-update pixel system.
+A high-performance e-paper display driver for ESP32-S3, targeting the **M5Stack M5PaperS3** and **LilyGo T5 S3 GPS**. Achieves ~20fps equivalent update rates (FAST mode) through a combination of ESP32-S3 vector (SIMD) assembly, a custom LCD_CAM DMA pipeline, and a delta-update pixel system.
 
 ---
 
