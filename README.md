@@ -116,15 +116,16 @@ For the LVGL binding, use the provided colour constants (`EPD_PainterLVGL::WHITE
 
 ## Shutdown handling.
 
-EPD_Painter checks a 'shutdown flag' on initalisation. When the device is reset (either by software, or pressing the reset button), if this is set to shutdown, it will begin a shutdown sequence:
-- The Existing image is erased. (Image data stored in PSRAM data survives reset)
+EPD_Painter checks a shutdown flag on initalisation. When the device is reset (either by software, or pressing the reset button), if this is set to shutdown, it will begin a shutdown sequence:
+- The Existing image is erased. (Image data stored in PSRAM data survives a reset)
 - The screen is cleared
-- 
-- When the device powers off, EPD_Painter displays a static image stored in LittleFS at:
+- an shutdown image '/.epd_painter_shutdown.img' is loaded from little_fs, and output to the EPD.
+- Device is powered off.
 
-```
-/.epd_painter_shutdown.img
-```
+If the flag is set to startup normally, then:
+- The shutdown image is first loaded from little_fs and is 'unpainted' from the EPD screen. This keeps DC balance by sending the reverse pulses to the screen that were sent, when the device was first turned off.
+- The screen is cleared.
+- Device continues to boot normally.
 
 If the file is not present, a Mandelbrot fractal is generated as a fallback. The file format is raw 2bpp packed pixels — 4 pixels per byte, `00`=white through `11`=black — matching the driver's internal format.
 
