@@ -180,14 +180,14 @@ Then upload `shutdown.img` to LittleFS at the path `/.epd_painter_shutdown.img` 
 
 Wraps `EPD_PainterAdafruit`, which extends `GFXcanvas8`. All standard Adafruit GFX drawing functions are available — `print()`, `drawLine()`, `drawBitmap()`, `fillRect()`, `setFont()`, etc.
 
-Pixel values are 8bpp greyscale. The driver reads the two most significant bits, giving four shades:
+Pixel values are 8bpp, but only the two most significant bits are used, giving four shades. Use the logical values `0`–`3`:
 
 | Value | Shade |
 |---|---|
-| `0x00` | White |
-| `0x55` | Light grey |
-| `0xAA` | Dark grey |
-| `0xFF` | Black |
+| `0` | White |
+| `1` | Light grey |
+| `2` | Dark grey |
+| `3` | Black |
 
 ### Complete example — M5PaperS3
 
@@ -207,13 +207,13 @@ void setup() {
     }
 
     // Draw
-    display.fillScreen(0x00);               // white background
-    display.setTextColor(0xFF);             // black text
+    display.fillScreen(0);               // white background
+    display.setTextColor(3);             // black text
     display.setTextSize(3);
     display.setCursor(40, 40);
     display.print("Hello, EPD!");
 
-    display.drawRect(20, 20, 400, 80, 0xFF);
+    display.drawRect(20, 20, 400, 80, 3);
 
     // Push to panel — second pass runs automatically in background
     display.paint();
@@ -241,8 +241,8 @@ void setup() {
 
     display.clear();
 
-    display.fillScreen(0x00);
-    display.setTextColor(0xFF);
+    display.fillScreen(0);
+    display.setTextColor(3);
     display.setTextSize(2);
     display.setCursor(10, 10);
     display.print("LilyGo T5 S3 GPS");
@@ -259,8 +259,8 @@ void loop() {}
 int counter = 0;
 
 void loop() {
-    display.fillScreen(0x00);              // clear framebuffer to white
-    display.setTextColor(0xFF);
+    display.fillScreen(0);              // clear framebuffer to white
+    display.setTextColor(3);
     display.setTextSize(4);
     display.setCursor(100, 220);
     display.print(counter++);
@@ -282,7 +282,7 @@ void loop() {
         display.clear();
     }
 
-    display.setTextColor(0xFF);
+    display.setTextColor(3);
     display.setCursor(50, 50);
     display.print("Frame: ");
     display.print(refreshCount);
@@ -360,7 +360,7 @@ void loop() {
 // Fast scrolling / animation
 display.setQuality(EPD_Painter::Quality::QUALITY_FAST);
 for (int i = 0; i < 100; i++) {
-    display.fillScreen(0x00);
+    display.fillScreen(0);
     display.setCursor(i * 4, 200);
     display.print(">>>");
     display.paint();
@@ -368,7 +368,7 @@ for (int i = 0; i < 100; i++) {
 
 // Final high-quality render
 display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
-display.fillScreen(0x00);
+display.fillScreen(0);
 display.setCursor(40, 200);
 display.print("Done.");
 display.paint();
