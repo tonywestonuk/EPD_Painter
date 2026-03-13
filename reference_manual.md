@@ -124,7 +124,7 @@ E-paper panels are driven by waveforms where each period is encoded as 2 bits. F
 
 More grey levels would break this clean 1:1 mapping. Converting, say, 4bpp or 8bpp pixel values into 2-bit waveform periods requires significantly more memory manipulation per pixel, which would make the pipeline too slow for real-time updates.
 
-In short: four shades is the sweet spot where the pixel format and the waveform encoding are the same thing — and that is what makes the ~70fps equivalent update rate possible.
+In short: four shades is the sweet spot where the pixel format and the waveform encoding are the same thing — and that is what makes full screen updates at 20fps update rate possible.
 
 ---
 
