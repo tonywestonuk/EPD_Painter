@@ -567,7 +567,7 @@ per frame (during `ink_on`/`ink_off`) so PSRAM is fine.
   EPD_Painter_presets.h      Board-specific pin configurations
   epd_painter_powerctl       TPS65185 power management (for boards with this chip)
   epd_painter_shutdown.h/.cpp  Screen-buffer reconciliation across power cycles,
-                               double-reset shutdown trigger, shutdown image
+                               reset-to-shutdown trigger, shutdown image
                                storage, idle timer, pre-shutdown callbacks
 ```
 

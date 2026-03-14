@@ -425,30 +425,35 @@ driving every pixel away from the shutdown state and back toward white.
 
 ---
 
-### How the two-reset toggle works
+### How the reset-to-shutdown mechanism works
 
-Shutdown is triggered by pressing the hardware reset button twice. The driver
-uses NVS (non-volatile storage) to coordinate state across resets:
+Shutdown is triggered by pressing the hardware reset button **once** while the
+device is running on battery. The driver uses NVS (non-volatile storage) to
+track state across resets:
 
 ```
   NVS key "shutdown" values:
-    0 = normal — no shutdown pending
-    1 = armed  — shutdown was requested on the previous reset
-    2 = force  — always proceed immediately, no popup
+    0 = unarmed — device has not been running yet (e.g. fresh after shutdown)
+    1 = armed   — device has been running; next reset will trigger shutdown
+    2 = force   — always proceed immediately, no popup
 ```
 
+The key insight is that the device **arms itself on every normal boot**. So by
+the time the user presses reset, the flag is already set to `1` — a single
+press is all that's needed.
+
 ```
-  First reset (key = 0):
+  Normal boot (key = 0):
   ┌─────────────────────────────────────────────────────┐
   │  Read key = 0                                       │
-  │  Write key = 1  (arm for next reset)                │
+  │  Write key = 1  (arm — device is now running)       │
   │  If shutdown image exists in LittleFS:              │
   │    unpaintPacked() — drive it off the panel         │
   │    screenbuffer is now reconciled to all-white      │
-  │  Normal boot proceeds                               │
+  │  Normal operation proceeds                          │
   └─────────────────────────────────────────────────────┘
 
-  Second reset (key = 1):
+  User presses reset (key = 1):
   ┌─────────────────────────────────────────────────────┐
   │  Read key = 1                                       │
   │  Write key = 0  (clear flag)                        │
@@ -458,9 +463,12 @@ uses NVS (non-volatile storage) to coordinate state across resets:
   └─────────────────────────────────────────────────────┘
 ```
 
-If `proceed()` is called and the hardware power-off fails (e.g. USB is keeping
-the device alive), `ESP.restart()` is called automatically. The device then
-boots cleanly as a normal startup (key = 0).
+After `proceed()` completes and the device powers off, the flag is `0`. The
+next power-on is a normal boot that re-arms to `1` — the cycle repeats.
+
+If `proceed()` is called and the hardware power-off fails (e.g. USB was
+connected after the reset), `ESP.restart()` is called automatically. The
+device then boots cleanly as a normal startup (key = 0).
 
 ---
 
@@ -500,15 +508,15 @@ void setup() {
     display.clear();
     display.setTextColor(3);
     display.setCursor(40, 260);
-    display.print("Press reset twice to power off.");
+    display.print("Press reset to power off.");
     display.paint();
 }
 
 void loop() {}
 ```
 
-Press reset once: the DC-balance runs silently and the app boots normally.
-Press reset again: the shutdown image is shown and the device powers off.
+On a normal boot the DC-balance runs silently and the app starts. The device
+is now armed — pressing reset will trigger shutdown.
 
 ---
 
