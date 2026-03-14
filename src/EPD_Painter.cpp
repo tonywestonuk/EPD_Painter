@@ -198,11 +198,12 @@ bool EPD_Painter::begin() {
 
 
   // ---- Configure EPD control pins ----
-  EPD_PIN_OUTPUT(_config.pin_pwr);
+  // pin_pwr and pin_oe are -1 when managed by powerctl (e.g. LilyGo via PCA9555/TPS65185)
+  if (_config.pin_pwr >= 0) EPD_PIN_OUTPUT(_config.pin_pwr);
   EPD_PIN_OUTPUT(_config.pin_spv);
   EPD_PIN_OUTPUT(_config.pin_ckv);
   EPD_PIN_OUTPUT(_config.pin_sph);
-  EPD_PIN_OUTPUT(_config.pin_oe);
+  if (_config.pin_oe >= 0) EPD_PIN_OUTPUT(_config.pin_oe);
   EPD_PIN_OUTPUT(_config.pin_le);
   EPD_PIN_OUTPUT(_config.pin_cl);
 

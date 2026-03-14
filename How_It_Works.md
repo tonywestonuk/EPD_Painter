@@ -134,6 +134,15 @@ If the driver doesn't know what colour a pixel currently is, it would need to
 start from scratch every update, moving the pixel to full white, then to the
 actual colour it needs to be. This causes the panel to flash.
 
+**The screen buffer does not survive a power cycle.** On reboot it is
+initialised to all-white, but the physical panel still shows whatever was last
+displayed. The `EPD_PainterShutdown` class handles this: on shutdown it saves
+a known image (the shutdown image) to LittleFS and paints it to the panel; on
+the next boot it unpaints that image — driving all those pixels back toward
+white — so that by the time user code starts, the screen buffer and the
+physical panel are in agreement. See the Reference Manual for the full
+shutdown handling documentation.
+
 ---
 
 ## 4. Waveforms — How Greyscale Works
@@ -551,12 +560,15 @@ per frame (during `ink_on`/`ink_off`) so PSRAM is fine.
 ## 12. File Overview
 
 ```
-  EPD_Painter.h          Class definition, config struct, buffer pointers
-  EPD_Painter.cpp        C++ driver: init, DMA setup, paint(), clear(), sendRow()
-  EPD_Painter.S          Xtensa assembly: pixel packing, waveform conversion,
-                         ink_on, ink_off
-  EPD_Painter_presets.h  Board-specific pin configurations
-  epd_painter_powerctl   TPS65185 power management (for boards with this chip)
+  EPD_Painter.h              Class definition, config struct, buffer pointers
+  EPD_Painter.cpp            C++ driver: init, DMA setup, paint(), clear(), sendRow()
+  EPD_Painter.S              Xtensa assembly: pixel packing, waveform conversion,
+                             ink_on, ink_off
+  EPD_Painter_presets.h      Board-specific pin configurations
+  epd_painter_powerctl       TPS65185 power management (for boards with this chip)
+  epd_painter_shutdown.h/.cpp  Screen-buffer reconciliation across power cycles,
+                               double-reset shutdown trigger, shutdown image
+                               storage, idle timer, pre-shutdown callbacks
 ```
 
 ### Key Data Flow Summary

@@ -72,4 +72,5 @@ private:
     void showMand();
     void showMandAndPaint();
     void powerOff();
+    bool isUsbConnected();
 };

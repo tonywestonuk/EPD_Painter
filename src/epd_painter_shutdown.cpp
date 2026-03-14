@@ -152,6 +152,24 @@ void EPD_PainterShutdown::showMandAndPaint() {
 }
 
 // ---------------------------------------------------------------------------
+// Returns true if VBUS (USB power) is present, via BQ25896 reg 0x0B.
+// Checks VBUS_GD (bit 7) or any VBUS_STAT (bits 6:3) — VBUS_GD alone can
+// read 0 even with USB connected depending on adapter type detection.
+bool EPD_PainterShutdown::isUsbConnected() {
+  const auto cfg = _epd->getConfig();
+  TwoWire* wire = cfg.i2c.wire;
+  if (!wire) return false;
+  const uint8_t BQ25896_ADDR = 0x6B;
+  wire->beginTransmission(BQ25896_ADDR);
+  wire->write(0x0B);
+  if (wire->endTransmission(false) != 0) return false;
+  uint8_t n = wire->requestFrom(BQ25896_ADDR, (uint8_t)1);
+  if (n == 0 || !wire->available()) return false;
+  uint8_t reg = wire->read();
+  return (reg & 0xF8) != 0;  // VBUS_GD (bit 7) or VBUS_STAT (bits 6:3)
+}
+
+// ---------------------------------------------------------------------------
 void EPD_PainterShutdown::powerOff() {
   const auto cfg = _epd->getConfig();
   if (cfg.pin_syspwr != -1) {
@@ -181,6 +199,12 @@ void EPD_PainterShutdown::powerOff() {
 EPD_PainterShutdown::EPD_PainterShutdown(EPD_Painter* p_epd) {
   _epd = p_epd;
 
+  if (isUsbConnected()) {
+    printf("USB Connected - skipping shutdown handling \n");
+    return;
+  }
+
+
   // Shutdown state is stored as a uint8_t:
   //   0 = normal startup
   //   1 = shutdown requested (popup shown if autoShutdown=false, else auto-proceed)
@@ -188,6 +212,7 @@ EPD_PainterShutdown::EPD_PainterShutdown(EPD_Painter* p_epd) {
   Preferences prefs;
   prefs.begin("power", false);
   uint8_t flag = prefs.getUChar("shutdown", 0);
+
 
   if (flag == 2) {
     // Force shutdown — clear flag and proceed immediately, no popup.

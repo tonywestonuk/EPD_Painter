@@ -376,15 +376,352 @@ display.paint();
 
 ---
 
+---
+
+## Shutdown Handling
+
+### Why an EPD driver needs shutdown management
+
+An e-paper display is different from every other display technology in one
+critical way: **the image is always active, even when the device has no power.**
+
+Pigment particles are mechanical — once moved into position by a voltage pulse,
+they stay there indefinitely with no power required. This is what gives EPD its
+ultra-low standby power. But it creates a problem for software.
+
+The driver maintains `packed_screenbuffer` — a software model of exactly what
+is physically shown on the panel at every pixel. This buffer lives in RAM and
+is lost when the device powers off. On the next boot the software assumes the
+screen is blank (all white), but the panel physically still shows whatever it
+last displayed. If nothing is done to reconcile this:
+
+- `paint()` computes wrong deltas — it thinks pixels are white when they aren't
+- Images build up as "ghost" layers rather than replacing each other cleanly
+- The display gradually degrades
+
+Beyond the software state problem, EPD panels also accumulate **DC bias** over
+time. Leaving particles driven hard in one direction — as happens when a dark
+image sits on screen for extended periods — causes ion migration within the
+fluid. Over time this manifests as permanent ghosting and reduced contrast.
+Proper shutdown and startup procedures prevent this by driving pixels to a
+known neutral state.
+
+EPD_Painter handles all of this automatically through the `EPD_PainterShutdown`
+class, created by `begin()`.
+
+```
+  Power-off                             Power-on (next boot)
+  ──────────────────────────────────    ──────────────────────────────────────
+  1. Paint shutdown image to panel      1. Load shutdown image from LittleFS
+  2. Save packed image to LittleFS      2. unpaintPacked() drives it off screen
+  3. Power off hardware                    (screenbuffer reconciled → all white)
+                                        3. Normal operation begins
+```
+
+The shutdown image serves two purposes: it gives the user a clean resting
+image (rather than a frozen UI), and its known pixel values let the driver
+reconcile the screenbuffer on the next startup by unpainting it — i.e.
+driving every pixel away from the shutdown state and back toward white.
+
+---
+
+### How the two-reset toggle works
+
+Shutdown is triggered by pressing the hardware reset button twice. The driver
+uses NVS (non-volatile storage) to coordinate state across resets:
+
+```
+  NVS key "shutdown" values:
+    0 = normal — no shutdown pending
+    1 = armed  — shutdown was requested on the previous reset
+    2 = force  — always proceed immediately, no popup
+```
+
+```
+  First reset (key = 0):
+  ┌─────────────────────────────────────────────────────┐
+  │  Read key = 0                                       │
+  │  Write key = 1  (arm for next reset)                │
+  │  If shutdown image exists in LittleFS:              │
+  │    unpaintPacked() — drive it off the panel         │
+  │    screenbuffer is now reconciled to all-white      │
+  │  Normal boot proceeds                               │
+  └─────────────────────────────────────────────────────┘
+
+  Second reset (key = 1):
+  ┌─────────────────────────────────────────────────────┐
+  │  Read key = 1                                       │
+  │  Write key = 0  (clear flag)                        │
+  │  isPending() = true                                 │
+  │  If autoShutdown = true:  proceed() called          │
+  │  If autoShutdown = false: deferred to user code     │
+  └─────────────────────────────────────────────────────┘
+```
+
+If `proceed()` is called and the hardware power-off fails (e.g. USB is keeping
+the device alive), `ESP.restart()` is called automatically. The device then
+boots cleanly as a normal startup (key = 0).
+
+---
+
+### USB power behaviour
+
+When the device is powered via USB, the shutdown state machine is bypassed
+entirely. `EPD_PainterShutdown` detects VBUS presence via the BQ25896 charger
+IC (I2C register 0x0B, VBUS_STAT bits) and returns from the constructor
+immediately, leaving `isPending()` false and no flag written to NVS.
+
+This means pressing reset while USB is connected always produces a clean normal
+boot — which is exactly the right behaviour during development.
+
+---
+
+### Default behaviour (autoShutdown = true)
+
+With the default settings, `begin()` handles everything transparently:
+
+```cpp
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#include "EPD_Painter_presets.h"
+#include "EPD_Painter_Adafruit.h"
+#include "LittleFS.h"
+
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+void setup() {
+    Serial.begin(115200);
+    LittleFS.begin(true);
+
+    if (!display.begin()) {      // shutdown is handled inside begin() automatically
+        Serial.println("init failed");
+        while (1);
+    }
+
+    display.clear();
+    display.setTextColor(3);
+    display.setCursor(40, 260);
+    display.print("Press reset twice to power off.");
+    display.paint();
+}
+
+void loop() {}
+```
+
+Press reset once: the DC-balance runs silently and the app boots normally.
+Press reset again: the shutdown image is shown and the device powers off.
+
+---
+
+### Intercepting shutdown — showing a confirmation screen
+
+Set `setAutoShutdown(false)` before `begin()` so that `proceed()` is not called
+automatically. Then check `isPending()` in your loop and show your own UI
+before deciding whether to proceed or cancel.
+
+```cpp
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+void setup() {
+    Serial.begin(115200);
+    LittleFS.begin(true);
+
+    display.setAutoShutdown(false);   // handle shutdown yourself
+
+    if (!display.begin()) {
+        Serial.println("init failed");
+        while (1);
+    }
+
+    display.clear();
+    drawMainScreen();
+    display.paint();
+}
+
+static bool shutdownPopupShown = false;
+
+void loop() {
+    if (display.shutdown()->isPending() && !shutdownPopupShown) {
+        shutdownPopupShown = true;
+        showShutdownConfirmation();   // draw your popup
+        display.paint();
+    }
+
+    // Later — user presses a button or taps the touchscreen:
+    // display.shutdown()->proceed();   // confirm — show shutdown image, power off
+    // display.shutdown()->cancel();    // cancel — re-arm the flag, resume normal use
+}
+
+void showShutdownConfirmation() {
+    display.fillRect(280, 190, 400, 160, 1);   // popup background
+    display.drawRect(280, 190, 400, 160, 3);
+    display.setTextColor(3);
+    display.setTextSize(2);
+    display.setCursor(340, 220);
+    display.print("Power off?");
+    display.setCursor(310, 260);
+    display.print("[Reset] confirm  [Touch] cancel");
+}
+```
+
+> **`cancel()` re-arms the flag.** After cancellation, pressing reset again
+> will trigger `isPending()` once more. This matches the expected behaviour —
+> the user still has a way to shut down after cancelling.
+
+---
+
+### Running code before power-off — pre-shutdown callback
+
+Register a callback that runs at the start of every `proceed()` call, before
+the shutdown image is painted and the device powers off. Use this to send a
+final network message, flush data to storage, or log a shutdown event.
+
+```cpp
+display.shutdown()->setPreShutdownCallback([]() {
+    Serial.println("Shutting down — sending goodbye packet...");
+    network.sendShutdownNotice();
+    delay(200);   // allow time for transmission
+});
+```
+
+The callback runs regardless of whether shutdown was triggered by a double
+reset, an idle timer expiry, or a direct call to `shutdown()`.
+
+---
+
+### Idle auto-off timer
+
+Start a countdown on boot. Any user activity resets the timer. When the timer
+expires the device shuts down automatically.
+
+```cpp
+void setup() {
+    // ...
+    display.begin();
+
+    // Power off after 30 minutes of inactivity
+    display.shutdown()->startIdleTimer(30 * 60);
+}
+
+void loop() {
+    if (userTouchedScreen() || buttonPressed()) {
+        display.shutdown()->resetIdleTimer();   // restart the countdown
+    }
+}
+```
+
+The timer calls `shutdown(true)` on expiry — force mode, no popup, immediate
+proceed. Cancel it entirely if your application manages its own sleep logic:
+
+```cpp
+display.shutdown()->cancelIdleTimer();
+```
+
+---
+
+### Triggering shutdown from code
+
+Call `shutdown()` directly to write the NVS flag and restart into the shutdown
+sequence. This is the same path used by the idle timer.
+
+```cpp
+// Normal path — if autoShutdown=false, isPending() becomes true on the
+// next boot and your popup can still intervene.
+display.shutdown()->shutdown();
+
+// Force path — always proceeds immediately, no popup.
+display.shutdown()->shutdown(true);
+```
+
+---
+
+### LVGL — shutdown with a popup widget
+
+In an LVGL application, the recommended pattern is to create the shutdown popup
+as a hidden LVGL object and make it visible when `isPending()` is true. The
+flush callback handles painting automatically.
+
+```cpp
+EPD_PainterLVGL display(EPD_PAINTER_PRESET);
+static lv_obj_t *shutdown_popup = nullptr;
+
+void create_shutdown_popup() {
+    shutdown_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(shutdown_popup, 360, 160);
+    lv_obj_align(shutdown_popup, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(shutdown_popup, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *label = lv_label_create(shutdown_popup);
+    lv_label_set_text(label, "Power off?");
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *btn_yes = lv_button_create(shutdown_popup);
+    lv_obj_set_size(btn_yes, 120, 48);
+    lv_obj_align(btn_yes, LV_ALIGN_BOTTOM_LEFT, 16, -16);
+    lv_obj_t *lbl_yes = lv_label_create(btn_yes);
+    lv_label_set_text(lbl_yes, "Power off");
+    lv_obj_add_event_cb(btn_yes, [](lv_event_t*) {
+        display.shutdown()->proceed();
+    }, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *btn_no = lv_button_create(shutdown_popup);
+    lv_obj_set_size(btn_no, 120, 48);
+    lv_obj_align(btn_no, LV_ALIGN_BOTTOM_RIGHT, -16, -16);
+    lv_obj_t *lbl_no = lv_label_create(btn_no);
+    lv_label_set_text(lbl_no, "Cancel");
+    lv_obj_add_event_cb(btn_no, [](lv_event_t*) {
+        display.shutdown()->cancel();
+        lv_obj_add_flag(shutdown_popup, LV_OBJ_FLAG_HIDDEN);
+    }, LV_EVENT_CLICKED, nullptr);
+}
+
+void setup() {
+    lv_init();
+    lv_tick_set_cb([]() -> uint32_t { return millis(); });
+
+    display.setAutoShutdown(false);
+    display.begin();
+    create_shutdown_popup();
+
+    display.shutdown()->startIdleTimer(60 * 60);   // 1 hour idle timeout
+}
+
+void loop() {
+    if (display.shutdown()->isPending()) {
+        lv_obj_remove_flag(shutdown_popup, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_timer_handler();
+    delay(5);
+}
+```
+
+---
+
+### EPD_PainterShutdown API summary
+
+| Method | Description |
+|---|---|
+| `isPending()` | Returns `true` if a shutdown was requested on the previous reset |
+| `proceed()` | Paint shutdown image, power off. Does nothing if `!isPending()` |
+| `cancel()` | Abort pending shutdown and re-arm the flag. Does nothing if `!isPending()` |
+| `shutdown(force)` | Write NVS flag and restart. `force=true` bypasses popups |
+| `setPreShutdownCallback(fn)` | Register a `void()` callback run before every `proceed()` |
+| `startIdleTimer(seconds)` | Start a one-shot idle auto-off countdown |
+| `resetIdleTimer()` | Restart the idle countdown from zero |
+| `cancelIdleTimer()` | Stop and destroy the idle timer |
+
+---
+
 ## Summary
 
 | Function | Blocks? | What it does |
 |---|---|---|
-| `begin()` | yes | Allocate buffers, init hardware |
+| `begin()` | yes | Allocate buffers, init hardware, create shutdown handler |
 | `paint()` | first pass | Delta-update; first pass blocks, second pass runs in background |
 | `paintLater()` | no | Trigger a background delta-update; returns immediately |
 | `clear()` | yes | Drive the **physical panel** to full white, remove ghosting |
 | `setQuality(q)` | — | Set waveform timing for next paint |
+| `setAutoShutdown(bool)` | — | If `false`, `isPending()` must be checked manually in `loop()` |
+| `shutdown()` | — | Returns the `EPD_PainterShutdown*` instance created by `begin()` |
 
 **Ghosting removal recipe:**
 ```cpp

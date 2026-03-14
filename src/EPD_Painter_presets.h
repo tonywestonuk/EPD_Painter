@@ -28,8 +28,9 @@
     static EPD_Painter::Config EPD_PAINTER_PRESET = {
         .width    = 960,
         .height   = 540,
-        .pin_pwr  = -1,
+        .pin_pwr  = -1,  // managed via TPS65185 over I2C (powerctl)
         .pin_sph  = 41,
+        .pin_oe   = -1,  // managed via PCA9555 over I2C (powerctl)
         .pin_cl   = 4,
         .pin_spv  = 45,
         .pin_ckv  = 48,
