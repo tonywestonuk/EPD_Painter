@@ -93,6 +93,12 @@ struct PowerCtlConfig {
 
   void setQuality(Quality quality);
 
+  // Dither an 8bpp framebuffer (0=black … 255=white) in-place to the driver's
+  // 4-level encoding: 0=white, 1=lt grey, 2=dk grey, 3=black.
+  // Uses Floyd-Steinberg error diffusion. Allocates one row of int16 scratch
+  // (~2 KB for a 960-wide panel) internally.
+  static void dither(uint8_t* fb, uint16_t width, uint16_t height);
+
   Config getConfig(){
     return _config;
   }

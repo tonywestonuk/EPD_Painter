@@ -83,6 +83,7 @@ public:
     // -------------------------------------------------------------------------
     void paint() { _painter.paint(buffer); }
     void clear() { _painter.clear(); }
+    void dither() { EPD_Painter::dither(buffer, _config.width, _config.height); }
 
     // -------------------------------------------------------------------------
     // Quality

@@ -684,3 +684,58 @@ void EPD_Painter::clear() {
 
 
 }
+// =============================================================================
+// dither()
+//
+// Converts an 8bpp greyscale framebuffer (0=black … 255=white) in-place to
+// the driver's 4-level encoding:  0=white  1=light-grey  2=dark-grey  3=black
+//
+// Algorithm: Floyd-Steinberg error diffusion.
+// A single row of int16 scratch (next_err[width]) carries the below-row error
+// forward so the main buffer never needs to be widened beyond uint8.
+//
+// Error distribution:
+//          [x]  →  right:        7/16
+//   below-left:  3/16   below:  5/16   below-right:  1/16
+// =============================================================================
+void EPD_Painter::dither(uint8_t* fb, uint16_t width, uint16_t height) {
+    // Representative 8bpp values for each 2bpp level (0=white … 3=black)
+    static const uint8_t kLevel8[4] = { 255, 170, 85, 0 };
+
+    int16_t* next_err = (int16_t*)heap_caps_malloc(
+        (size_t)width * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!next_err) return;
+    memset(next_err, 0, (size_t)width * sizeof(int16_t));
+
+    for (uint16_t y = 0; y < height; y++) {
+        uint8_t* row = fb + (size_t)y * width;
+        int16_t carry = 0;
+
+        for (uint16_t x = 0; x < width; x++) {
+            int32_t val = (int32_t)row[x] + carry + next_err[x];
+            next_err[x] = 0;
+            if (val < 0)   val = 0;
+            if (val > 255) val = 255;
+
+            // Quantise to nearest level (0=white … 3=black)
+            uint8_t q;
+            if      (val >= 213) q = 0;  // white
+            else if (val >= 128) q = 1;  // light grey
+            else if (val >= 43)  q = 2;  // dark grey
+            else                 q = 3;  // black
+
+            row[x] = q;
+
+            int32_t err = val - (int32_t)kLevel8[q];
+
+            carry = (err * 7) >> 4;
+            if (y + 1 < height) {
+                if (x > 0)         next_err[x - 1] += (int16_t)((err * 3) >> 4);
+                                   next_err[x]     += (int16_t)((err * 5) >> 4);
+                if (x + 1 < width) next_err[x + 1] += (int16_t)((err * 1) >> 4);
+            }
+        }
+    }
+
+    heap_caps_free(next_err);
+}

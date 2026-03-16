@@ -44,7 +44,7 @@ Enable via `#define` before including the library:
 
 ### Delta Update System
 
-`packed_screenbuffer` (PSRAM) tracks the physical display state. Each `paint()` call compares the new framebuffer against this state and only drives pixels that changed. Pixels needing lightening within a darkening chunk are deferred to a subsequent pass — two `paint()` calls are needed for complete coverage.
+`packed_screenbuffer` (PSRAM) tracks the physical display state. Each `paint()` call compares the new framebuffer against this state and only drives pixels that changed. Pixels needing lightening within a darkening chunk are deferred to a subsequent pass — a single `paint()` call is sufficient for complete coverage.
 
 ### Waveform System
 
