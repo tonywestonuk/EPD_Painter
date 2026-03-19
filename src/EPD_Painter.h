@@ -52,6 +52,15 @@ struct PowerCtlConfig {
     ROTATION_CW   // 90° clockwise — portrait drawing canvas (width↔height swapped)
   };
 
+  struct Waveforms {
+      uint8_t fast_lighter[3][7];
+      uint8_t fast_darker[3][7];
+      uint8_t normal_lighter[3][13];
+      uint8_t normal_darker[3][13];
+      uint8_t high_lighter[3][13];
+      uint8_t high_darker[3][13];
+  };
+
   struct Config {
       uint16_t width;
       uint16_t height;
@@ -68,6 +77,7 @@ struct PowerCtlConfig {
       int8_t data_pins[8];
       I2CBusConfig i2c{};
       PowerCtlConfig power{};
+      Waveforms waveforms;
 
       // Returns a copy of this config with rotation set — lets you write:
       //   EPD_PainterAdafruit epd(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
