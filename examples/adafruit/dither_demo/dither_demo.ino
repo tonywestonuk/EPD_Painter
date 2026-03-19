@@ -274,25 +274,32 @@ void setup() {
         Serial.println("EPD init failed");
         while (1);
     }
-   // epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
-    epd.clear();
-    epd.clear();
-    epd.clear();
+    epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
+    //epd.clear();
+    //epd.clear();
+    //epd.clear();
 
 
     showPage(currentPage);
 }
 
 void loop() {
+#ifdef EPD_PAINTER_PRESET_M5PAPER_S3
+    // M5PaperS3 has no user-accessible BOOT button — advance automatically
+    delay(4000);
+    currentPage = (currentPage == 1) ? 2 : 1;
+    showPage(currentPage);
+#else
     // Wait for BOOT button press (active LOW), with debounce
     if (digitalRead(BOOT_BTN) == LOW) {
-        delay(50);                          // debounce
+        delay(50);
         if (digitalRead(BOOT_BTN) == LOW) {
             currentPage = (currentPage == 1) ? 2 : 1;
             showPage(currentPage);
-            while (digitalRead(BOOT_BTN) == LOW)  // wait for release
+            while (digitalRead(BOOT_BTN) == LOW)
                 delay(10);
-            delay(50);                      // debounce on release
+            delay(50);
         }
     }
+#endif
 }

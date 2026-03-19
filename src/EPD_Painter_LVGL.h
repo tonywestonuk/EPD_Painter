@@ -98,10 +98,8 @@ public:
     // end()
     // -------------------------------------------------------------------------
     bool end() { return _painter.end(); }
-    void clear() { 
-        _painter.clear(); 
-        
-    }
+    void clear()   { _painter.clear(); }
+    void fxClear() { _painter.fxClear(); }
 
     // -------------------------------------------------------------------------
     // Quality

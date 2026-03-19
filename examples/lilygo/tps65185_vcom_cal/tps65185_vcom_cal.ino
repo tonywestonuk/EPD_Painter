@@ -133,7 +133,7 @@ static bool vcomMeasureOnce(int startMv, int &resultMv) {
     // Poll until ACQ auto-clears (600 ms timeout).
     bool done = false;
     for (int i = 0; i < 1000; i++) {
-        delay(1);
+        epd.driver().paintPacked(_nullbuf);
         uint8_t v2poll = 0;
         if (!tpsRead(TPS_VCOM2, v2poll)) break;
         if (!(v2poll & VCOM2_ACQ)) { done = true; break; }

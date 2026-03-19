@@ -81,9 +81,10 @@ public:
     // -------------------------------------------------------------------------
     // Rendering
     // -------------------------------------------------------------------------
-    void paint() { _painter.paint(buffer); }
-    void clear() { _painter.clear(); }
-    void dither() { EPD_Painter::dither(buffer, _config.width, _config.height); }
+    void paint()   { _painter.paint(buffer); }
+    void clear()   { _painter.clear(); }
+    void fxClear() { _painter.fxClear(); }
+    void dither()  { EPD_Painter::dither(buffer, _config.width, _config.height); }
 
     // -------------------------------------------------------------------------
     // Quality

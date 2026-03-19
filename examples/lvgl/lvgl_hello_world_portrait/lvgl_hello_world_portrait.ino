@@ -48,6 +48,9 @@ static void switch_event_cb(lv_event_t *e)   { /* handle switch toggle  */ }
 static void button_event_cb(lv_event_t *e)   { /* handle button press   */ }
 static void checkbox_event_cb(lv_event_t *e) { /* handle checkbox change */ }
 
+static uint32_t last_activity_ms = 0;
+static bool     idle_cleared     = false;
+
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     tc.read();
     // ROTATION_INVERTED in TAMC_GT911 maps physical touch coordinates to
@@ -55,6 +58,11 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     data->point.x = tc.x;
     data->point.y = tc.y;
     data->state   = tc.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
+    if (tc.down) {
+        last_activity_ms = millis();
+        idle_cleared     = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,9 +406,16 @@ void setup() {
     lv_indev_t *touch = lv_indev_create();
     lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(touch, touch_read_cb);
+
+    last_activity_ms = millis();
 }
 
 void loop() {
     lv_timer_handler();
     delay(5);
+
+    if (!idle_cleared && (millis() - last_activity_ms) > 3000) {
+        idle_cleared = true;
+        display.fxClear();
+    }
 }

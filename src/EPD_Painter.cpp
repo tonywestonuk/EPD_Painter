@@ -467,8 +467,8 @@ static uint8_t nm_lighter_waveform[][13] = {
 };
 
 static uint8_t nm_darker_waveform[][13] = {
-  { 2, 3, 1, 1, 1, 2, 2, 1, 2, 1, 1, 1, 1 },
-  { 3, 1, 1, 2, 1, 1, 1, 1, 1, 3, 3, 1, 1 },
+  { 2, 3, 1, 1, 1, 2, 2, 1, 1, 2, 1, 1, 1 },
+  { 1, 1, 1, 3, 1, 2, 1, 1, 1, 3, 3, 1, 1 },
   { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 };
 
@@ -476,13 +476,13 @@ static uint8_t nm_darker_waveform[][13] = {
 // Higer quality waveforms
 static uint8_t hq_lighter_waveform[][13] = {
   { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
-  { 1, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3 },
+  { 1, 3, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },
   { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 }
 };
 
 static uint8_t hq_darker_waveform[][13] = {
-  { 1, 3, 1, 2, 1, 2, 2, 2, 2, 1, 1, 1, 1 },
-  { 3, 1, 3, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1 },
+  { 2, 3, 1, 1, 1, 2, 2, 2, 1, 1, 2, 1, 1 },
+  { 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 1 },
   { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 };
 
@@ -633,9 +633,11 @@ void EPD_Painter::_paint_task_body() {
       }
 
      if (_config.quality == Quality::QUALITY_HIGH) {
-        EPD_DELAY_MS(3);
-
+        EPD_DELAY_MS(8);
+      } else if (_config.quality == Quality::QUALITY_NORMAL) {
+        EPD_DELAY_MS(2);
       }
+
     }
 
     vTaskDelay(1);  // yield once per frame: feeds WDT and lets application task run
@@ -701,6 +703,88 @@ void EPD_Painter::clear() {
 
 
 }
+// =============================================================================
+// fxClear() — sweeping bar clear effect
+//
+// A thick bar travels left-to-right across the panel. Within the bar, each
+// pixel is independently and randomly driven black or white on every pass,
+// so adjacent pixels may be heading in opposite directions — the "fuzz".
+// Left of the bar, pixels are settled white; right of the bar they are driven
+// black and wait for the bar to sweep over them.
+//
+// Tuning constants (pixels, dimensionless):
+//   BAR_W   — width of the active bar
+//   STEP    — columns advanced per step
+//   NPASSES — render passes per step (more = slower but better clearing)
+// =============================================================================
+void EPD_Painter::fxClear() {
+  const int prb = _config.width / 4;   // packed row bytes
+
+  // Wait for any in-progress paint to finish, then take exclusive control.
+  // Unlike clear(), we do NOT issue a white frame first — the screenbuffer
+  // must still reflect the current display state for the pixel mask to work.
+  xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
+
+  PanelPowerGuard guard(*this);
+
+  const int H = _config.height;
+
+  dma_buffer = dma_buffer1;
+
+  // All white (0b00) screenbuffer pixels are driven fully black in the dark
+  // zone and fully white in the light zone — no partial selection. This gives
+  // maximum contrast: a solid black leading edge and a solid white trailing
+  // edge. DC balance is maintained because dark and light zones are equal size.
+  const int BAR_DARK  = 180;   // rows of black voltage (leading edge)
+  const int BAR_LIGHT = 180;   // rows of white voltage (trailing edge)
+  const int BAR_H     = BAR_DARK + BAR_LIGHT;
+  const int STEP      = 15;    // 1 row per step → 60 dark + 60 light pulses per pixel
+
+  for (int bar_top = -BAR_H; bar_top <= H; bar_top += STEP) {
+    const int dark_top = bar_top + BAR_LIGHT;   // dark zone: lower (leading) half
+    const int bar_bot  = bar_top + BAR_H;
+
+    for (int row = 0; row < H; row++) {
+      uint32_t* buf32 = reinterpret_cast<uint32_t*>(dma_buffer);
+
+      if (row >= bar_top && row < dark_top) {
+        // Light phase (upper/trailing): all white pixels → white voltage
+        for (int i = 0; i < prb / 4; i++) {
+          const uint32_t* sb32 = reinterpret_cast<const uint32_t*>(packed_screenbuffer + row * prb) + i;
+          uint32_t either     = (*sb32 | (*sb32 >> 1)) & 0x55555555u;
+          uint32_t pixel_mask = ~(either | (either << 1));
+          buf32[i] = 0xAAAAAAAAu & pixel_mask;
+        }
+      } else if (row >= dark_top && row < bar_bot) {
+        // Dark phase (lower/leading): all white pixels → black voltage
+        for (int i = 0; i < prb / 4; i++) {
+          const uint32_t* sb32 = reinterpret_cast<const uint32_t*>(packed_screenbuffer + row * prb) + i;
+          uint32_t either     = (*sb32 | (*sb32 >> 1)) & 0x55555555u;
+          uint32_t pixel_mask = ~(either | (either << 1));
+          buf32[i] = 0x55555555u & pixel_mask;
+        }
+      } else {
+        memset(dma_buffer, 0x00, prb);
+      }
+      sendRow(row == 0, false);
+    }
+  }
+
+
+  // Final neutral flush — de-energise all pixels
+  memset(dma_buffer1, 0x00, prb);
+  memset(dma_buffer2, 0x00, prb);
+  for (int row = 0; row < H; ++row) {
+    sendRow(row == 0, row == H - 1);
+  }
+
+  // Screenbuffer is unchanged — non-white pixels were never driven, white pixels
+  // were already 0x00. No update needed.
+
+  xSemaphoreGive(_paint_active_sem);
+}
+
+
 // =============================================================================
 // dither()
 //

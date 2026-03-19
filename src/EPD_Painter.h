@@ -82,6 +82,7 @@ struct PowerCtlConfig {
   bool end();
 
   void clear();
+  void fxClear();
   void paint(uint8_t* framebuffer);
   void paintPacked(const uint8_t* packed);
   void unpaintPacked(const uint8_t* packed);
