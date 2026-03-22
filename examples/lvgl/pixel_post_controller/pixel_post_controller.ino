@@ -9,7 +9,7 @@
 #include "EPD_Painter_presets.h"
 #include "EPD_Painter_LVGL.h"
 #include "epd_painter_shutdown.h"  // needed for EPD_PainterShutdown* type
-#include <TAMC_GT911.h>
+#include <gt911_lite.h>
 #include <I2C_BM8563.h>
 #include "PixelPostNetwork.h"
 #include "battery.h"
@@ -24,7 +24,7 @@ static const uint8_t HMAC_KEY[32] = {
 static PixelPostNetwork net(HMAC_KEY);
 
 EPD_PainterLVGL display(EPD_PAINTER_PRESET);
-TAMC_GT911 tc(-1, EPD_PAINTER_PRESET.width, EPD_PAINTER_PRESET.height);
+GT911_Lite tc;
 static I2C_BM8563 *rtc = nullptr;
 static EPD_PainterShutdown *psd = nullptr;
 
@@ -103,6 +103,8 @@ static const int PREV_W = DISP_W - PREV_X - 20;  // 500
 static const int BOT_BTNS = 8;
 static const int BOT_BTN_W = (DISP_W - 2 * MARGIN - (BOT_BTNS - 1) * GAP) / BOT_BTNS;  // 108
 static const int BOT_BTN_H = BOTTOM_H - 2 * MARGIN;                                    // 62
+
+
 
 // ── Menu pages ────────────────────────────────────────────────────────────────
 // 7 menu buttons, each showing a page of 6 effect buttons.
@@ -649,9 +651,13 @@ static void touch_read_cb(lv_indev_t *, lv_indev_data_t *data) {
   if (psd) psd->resetIdleTimer();
   backlight_on_touch();
   }
-  data->point.x = tc.x;
-  data->point.y = tc.y;
+ 
+  data->point.x =  tc.y;
+  data->point.y =  display.getConfig().height-tc.x;
+
+
   data->state = tc.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
 }
 
 // ── Setup / loop ──────────────────────────────────────────────────────────────
@@ -685,7 +691,6 @@ void setup() {
   }
 
   if (display.getConfig().i2c.wire != nullptr) {
-    tc.setRotation(ROTATION_RIGHT);
     tc.begin(display.getConfig().i2c.wire);
     static I2C_BM8563 rtc_obj(I2C_BM8563_DEFAULT_ADDRESS, *display.getConfig().i2c.wire);
     rtc = &rtc_obj;
@@ -703,7 +708,7 @@ void setup() {
   });
   psd->startIdleTimer(3600);  // auto power-off after 1 hour idle
 
-  display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
+  //display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
 
   if (!(psd->isPending())) display.clear();
 

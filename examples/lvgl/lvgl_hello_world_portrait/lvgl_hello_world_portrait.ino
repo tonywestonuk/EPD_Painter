@@ -6,19 +6,19 @@
 // compact_pixels_rotated_cw() handles the rotation during compaction.
 
 // Choose your board.
-//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#define EPD_PAINTER_PRESET_M5PAPER_S3
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+//#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
 #include <lvgl.h>
 #include "EPD_Painter_presets.h"
 #include "EPD_Painter_LVGL.h"
-#include <TAMC_GT911.h>
+#include <gt911_lite.h>
 
 EPD_PainterLVGL display(EPD_PAINTER_PRESET, true);
 
 // Touch controller — ROTATION_INVERTED maps correctly for CW display rotation.
-TAMC_GT911 tc(-1, EPD_PAINTER_PRESET.width, EPD_PAINTER_PRESET.height);
+GT911_Lite tc;
 
 LV_FONT_DECLARE(Montserrat_Bold);
 
@@ -53,7 +53,7 @@ static bool     idle_cleared     = false;
 
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     tc.read();
-    // ROTATION_INVERTED in TAMC_GT911 maps physical touch coordinates to
+    // ROTATION_INVERTED in GT911_Lite maps physical touch coordinates to
     // portrait logical space correctly for CW display rotation on LilyGo T5.
     data->point.x = tc.x;
     data->point.y = tc.y;
@@ -374,9 +374,8 @@ void setup() {
     }
 
     if (display.getConfig().i2c.wire == nullptr) {
-        Serial.println("TAMC_GT911: Wire is null, skipping touch init");
+        Serial.println("GT911_Lite: Wire is null, skipping touch init");
     } else {
-        tc.setRotation(ROTATION_INVERTED);
         tc.begin(display.getConfig().i2c.wire);
     }
 

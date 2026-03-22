@@ -8,7 +8,7 @@
 #include <TinyGPSPlus.h>
 #include "EPD_Painter_presets.h"
 #include "EPD_Painter_LVGL.h"
-#include <TAMC_GT911.h>
+#include <gt911_lite.h>
 
 // Must be declared before Arduino preprocessor inserts function forward-decls
 // Each digit is ONE lv_obj_t; the draw callback renders all 7 segments itself.
@@ -19,7 +19,7 @@ struct SegDigit {
 };
 
 EPD_PainterLVGL display(EPD_PAINTER_PRESET);
-TAMC_GT911      tc(-1, EPD_PAINTER_PRESET.width, EPD_PAINTER_PRESET.height);
+GT911_Lite      tc;
 
 static uint32_t my_tick_cb() { return millis(); }
 
@@ -615,7 +615,9 @@ static void refresh() {
 // ── Touch ─────────────────────────────────────────────────────────────────────
 static void touch_read_cb(lv_indev_t *, lv_indev_data_t *data) {
     tc.read();
-    data->point.x = tc.x; data->point.y = tc.y;
+    data->point.x =  tc.y;
+    data->point.y =  display.getConfig().height-tc.x;
+    
     data->state   = tc.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
@@ -629,7 +631,6 @@ void setup() {
     if (!display.begin()) { Serial.println("Display init failed!"); while (1) delay(1000); }
 
     if (display.getConfig().i2c.wire != nullptr) {
-        tc.setRotation(ROTATION_RIGHT);
         tc.begin(display.getConfig().i2c.wire);
         gps_power_on(display.getConfig().i2c.wire);
         gpsSerial.begin(GPS_BAUD, SERIAL_8N1, BOARD_GPS_RXD, BOARD_GPS_TXD);
