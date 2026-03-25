@@ -2,6 +2,7 @@
 
 #include "build_opt.h"
 #include <EPD_Painter.h>
+#include <hal/gpio_ll.h>
 
 class epd_painter_powerctl {
 public:
@@ -18,8 +19,33 @@ public:
 
   void setVcomMv(int vcom_mv);
 
+  // ---- IRAM-safe shift-register control (H752 only) ----
+  // Called from sendRow() hot path; use direct GPIO register writes.
+  void IRAM_ATTR sr_set_le(bool val);   // toggle ep_latch_enable bit
+  void IRAM_ATTR sr_set_stv(bool val);  // toggle ep_stv bit
+
 private:
   EPD_Painter::Config config;
+
+  // ---- Shift-register state (74HCT4094D, H752) ----
+  // Bit layout pushed MSB-first (Q7..Q0):
+  //   Q7=ep_output_enable, Q6=ep_mode, Q5=ep_scan_direction, Q4=ep_stv,
+  //   Q3=neg_power_enable, Q2=pos_power_enable, Q1=power_disable, Q0=ep_latch_enable
+  struct ShiftState {
+    bool power_disable     = true;
+    bool pos_power_enable  = false;
+    bool neg_power_enable  = false;
+    bool ep_scan_direction = true;
+    bool ep_output_enable  = false;
+    bool ep_mode           = false;
+    bool ep_stv            = false;
+    bool ep_latch_enable   = false;
+  } _sr;
+
+  // Push _sr to the 74HCT4094D via bit-banging (slow, uses digitalWrite)
+  void sr_push_slow();
+  // Push _sr via direct GPIO register writes (IRAM-safe, fast)
+  void IRAM_ATTR sr_push_fast();
 
   // ---- PCA9535 cached state ----
   uint8_t _pca_out[2];

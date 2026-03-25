@@ -42,6 +42,73 @@ static const uint8_t kDataSignals[8] = {
 
 epd_painter_powerctl *powerctl = nullptr;
 
+static const EPD_Painter::Waveforms kLilyGoT5S3GpsWaveforms = {
+  .fast_lighter   = { { 1, 2, 2, 2, 2, 2, 3 },
+                      { 3, 2, 2, 2, 2, 2, 3 },
+                      { 2, 2, 2, 2, 2, 2, 2 } },
+  .fast_darker    = { { 1, 1, 3, 3, 1, 3, 1 },
+                      { 1, 3, 1, 1, 1, 1, 3 },
+                      { 1, 1, 1, 1, 1, 1, 1 } },
+  .normal_lighter = { { 1, 1, 1, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2 },
+                      { 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3 },
+                      { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
+  .normal_darker  = { { 1, 2, 1, 1, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
+                      { 1, 1, 1, 2, 2, 3, 1, 1, 3, 1, 3, 1, 1 },
+                      { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
+  .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
+                      { 1, 1, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },
+                      { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
+  .high_darker    = { { 1, 3, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1 },
+                      { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
+                      { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
+};
+
+// =============================================================================
+// detectBoardType()
+// Called at the start of begin() when EPD_PAINTER_PRESET_LILYGO_T5_S3_AUTO is
+// used.  Probes I2C for PCA9555 at 0x20 on SDA=39, SCL=40.
+// If NOT found, reconfigures 'config' for the older H752 shift-register board.
+// =============================================================================
+#ifdef ARDUINO
+static void detectBoardType(EPD_Painter::Config &config) {
+  // Only run when the AUTO preset markers are present
+  if (config.power.pca_addr != 0x20 || config.shift.data != -1) return;
+
+  printf("[EPD] Probing PCA9555 at SDA=39 SCL=40 addr=0x20...\n");
+  TwoWire probe(1);   // use bus 1 just for the probe; will be deleted
+  probe.begin(39, 40, 100000);
+  probe.beginTransmission(0x20);
+  bool found = (probe.endTransmission() == 0);
+  probe.end();
+  config.waveforms = kLilyGoT5S3GpsWaveforms;
+
+  if (found) {
+    printf("[EPD] PCA9555 found — using GPS board config\n");
+  } else {
+    printf("[EPD] PCA9555 NOT found — switching to H752 shift-register config\n");
+    // Overwrite all board-specific fields
+    config.pin_sph         = 9;
+    config.pin_oe          = -1;
+    config.pin_cl          = 10;
+    config.pin_spv         = -1;
+    config.pin_ckv         = 39;
+    config.pin_le          = -1;
+    config.pin_pwr         = -1;
+    config.data_pins[0]    = 11; config.data_pins[1] = 12;
+    config.data_pins[2]    = 13; config.data_pins[3] = 14;
+    config.data_pins[4]    = 21; config.data_pins[5] = 47;
+    config.data_pins[6]    = 45; config.data_pins[7] = 38;
+    config.i2c.sda         = 6;
+    config.i2c.scl         = 5;
+    config.power.pca_addr  = -1;
+    config.power.tps_addr  = -1;
+    config.shift.data      = 2;
+    config.shift.clk       = 42;
+    config.shift.str       = 1;
+  }
+}
+#endif
+
 // Assembly routines — see EPD_Painter.S for full documentation
 extern "C" void epd_painter_compact_pixels(
   const uint8_t *input, uint8_t *output, uint32_t size);
@@ -172,22 +239,34 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   }
 
   if (firstLine) {
-    gpio_clear_fast(_config.pin_spv);
-    gpio_clear_fast(_config.pin_ckv);
-    EPD_DELAY_US(1);
-    gpio_set_fast(_config.pin_ckv);
-    gpio_set_fast(_config.pin_spv);
+    if (_config.pin_spv >= 0) {
+      // Direct GPIO SPV pulse
+      gpio_clear_fast(_config.pin_spv);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+      gpio_set_fast(_config.pin_spv);
+    } else {
+      // H752: ep_stv is in shift register — toggle via powerctl
+      powerctl->sr_set_stv(false);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+      powerctl->sr_set_stv(true);
+    }
   } else {
-
-    gpio_set_fast(_config.pin_le);
-    gpio_clear_fast(_config.pin_le);
-
-
+    if (_config.pin_le >= 0) {
+      // Direct GPIO LE pulse
+      gpio_set_fast(_config.pin_le);
+      gpio_clear_fast(_config.pin_le);
+    } else {
+      // H752: ep_latch_enable is in shift register — toggle via powerctl
+      powerctl->sr_set_le(true);
+      powerctl->sr_set_le(false);
+    }
     gpio_clear_fast(_config.pin_ckv);
     EPD_DELAY_US(1);
     gpio_set_fast(_config.pin_ckv);
-
-
   }
 
   // Reset ownership, flush AFIFO, and restart GDMA from the correct descriptor.
@@ -202,9 +281,15 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     while (LCD_CAM.lcd_user.lcd_start) {}
 
     gpio_clear_fast(_config.pin_ckv);
-    gpio_set_fast(_config.pin_le);
-    EPD_DELAY_US(1);
-    gpio_clear_fast(_config.pin_le);
+    if (_config.pin_le >= 0) {
+      gpio_set_fast(_config.pin_le);
+      EPD_DELAY_US(1);
+      gpio_clear_fast(_config.pin_le);
+    } else {
+      powerctl->sr_set_le(true);
+      EPD_DELAY_US(1);
+      powerctl->sr_set_le(false);
+    }
     gpio_set_fast(_config.pin_ckv);
   }
 }
@@ -214,27 +299,29 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
 // =============================================================================
 bool EPD_Painter::begin() {
 
-  // -- Start I2C if needed.
+  // ---- Auto-detect board variant (GPS vs H752) when using AUTO preset ----
 #ifdef ARDUINO
-  if (_config.i2c.scl != -1 && _config.i2c.wire == nullptr) {
-    TwoWire *w = new TwoWire(0);
-    w->begin(_config.i2c.sda, _config.i2c.scl, _config.i2c.freq);
-    _config.i2c.wire = w;
-    EPD_DELAY_MS(50);
-  }
-#else
-  // I2C not used in ESP-IDF builds
+  detectBoardType(_config);
 #endif
 
+  // ---- Start I2C if needed (GPS board only; H752 has scl=-1) ----
+#ifdef ARDUINO
+  if (_config.i2c.scl != -1 && _config.i2c.wire == nullptr) {
+    _config.i2c.wire = new TwoWire(0);
+    _config.i2c.wire->begin(_config.i2c.sda, _config.i2c.scl, _config.i2c.freq);
+    //_config.i2c.wire = w;
+    EPD_DELAY_MS(50);
+  }
+#endif
 
   // ---- Configure EPD control pins ----
-  // pin_pwr and pin_oe are -1 when managed by powerctl (e.g. LilyGo via PCA9555/TPS65185)
+  // Pins managed by powerctl (PCA9555 or shift register) are set to -1.
   if (_config.pin_pwr >= 0) EPD_PIN_OUTPUT(_config.pin_pwr);
-  EPD_PIN_OUTPUT(_config.pin_spv);
+  if (_config.pin_spv >= 0) EPD_PIN_OUTPUT(_config.pin_spv);
   EPD_PIN_OUTPUT(_config.pin_ckv);
   EPD_PIN_OUTPUT(_config.pin_sph);
-  if (_config.pin_oe >= 0) EPD_PIN_OUTPUT(_config.pin_oe);
-  EPD_PIN_OUTPUT(_config.pin_le);
+  if (_config.pin_oe  >= 0) EPD_PIN_OUTPUT(_config.pin_oe);
+  if (_config.pin_le  >= 0) EPD_PIN_OUTPUT(_config.pin_le);
   EPD_PIN_OUTPUT(_config.pin_cl);
 
 
@@ -345,8 +432,8 @@ bool EPD_Painter::begin() {
   bitmask = static_cast<uint32_t *>(
     heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
 
-  // ── If a TPS chip is present, initialise the power controller ──
-  if (_config.power.tps_addr != -1) {
+  // ── Init power controller for GPS board (PCA9555+TPS65185) or H752 (shift reg) ──
+  if (_config.power.tps_addr != -1 || _config.shift.data >= 0) {
     printf("\n── PowerCtl Init ──\n");
     powerctl = new epd_painter_powerctl();
     if (!powerctl->begin(_config)) {
@@ -397,7 +484,7 @@ bool EPD_Painter::end() {
 // Power control
 // =============================================================================
 void EPD_Painter::powerOn() {
-  EPD_PIN_LOW(_config.pin_spv);
+  if (_config.pin_spv >= 0) EPD_PIN_LOW(_config.pin_spv);
   EPD_PIN_LOW(_config.pin_sph);
 
   if (powerctl) {
@@ -409,12 +496,12 @@ void EPD_Painter::powerOn() {
     EPD_DELAY_US(100);
   }
 
-  gpio_clear_fast(_config.pin_spv);
+  // SPV (ep_stv) for H752 is already asserted by powerctl->powerOn() via shift reg.
+  if (_config.pin_spv >= 0) gpio_clear_fast(_config.pin_spv);
   gpio_clear_fast(_config.pin_ckv);
   EPD_DELAY_US(1);
-
   gpio_set_fast(_config.pin_ckv);
-  gpio_set_fast(_config.pin_spv);
+  if (_config.pin_spv >= 0) gpio_set_fast(_config.pin_spv);
 }
 
 void EPD_Painter::powerOff() {

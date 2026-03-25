@@ -34,7 +34,7 @@ On top of that:
    ```
    git clone https://github.com/your-repo/EPD_Painter ~/Arduino/libraries/EPD_Painter
    ```
-2. Install the **Adafruit GFX Library** (required) via Arduino Library Manager
+2. Install the **Adafruit GFX Library** `>= 1.12.1` (required) via Arduino Library Manager
 3. Install **LVGL v9** (optional — needed for LVGL examples) via Arduino Library Manager
 4. Select your board in Arduino IDE: M5Stack M5PaperS3 or LilyGo T5 S3 GPS (ESP32-S3 with PSRAM)
 5. Add one `#define` before your includes to select your board preset (see Quick Start below)

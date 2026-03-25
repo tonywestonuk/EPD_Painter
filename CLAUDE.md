@@ -59,12 +59,17 @@ Enable via `#define` before including the library:
 | 2bpp screenbuffer | PSRAM | ~130 KB |
 | DMA row buffers | Internal RAM | 480 B (double-buffered) |
 
-## Hardware: LilyGo T5 S3 GPS
+## Hardware: LilyGo T5 S3 GPS (H752-1)
 
 - **GPS**: u-blox M10Q, UART1 RX=44 TX=43, baud 9600 (cold boot default)
 - **I2C**: SDA=39, SCL=40
 - **Devices**: 0x20 (PCA9555), 0x51 (PCF8563 RTC), 0x55 (BQ27220 PMU), 0x5D (GT911 touch), 0x6B (BQ25896 charger)
 - **GPS power**: PCA9555 port 0 bit 0 HIGH (`REG_CONFIG_P0=0xFE`, `REG_OUTPUT_P0=0xFF`)
+
+## Hardware: LilyGo T5 S3 (H752)
+
+- **I2C**: SDA=5, SCL=6
+- **Devices**: 0x51 (PCF8563 RTC), 0x55 (BQ27220 PMU), 0x5D (GT911 touch), 0x6B (BQ25896 charger)
 
 ## Technical Reference
 

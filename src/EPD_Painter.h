@@ -39,6 +39,11 @@ struct PowerCtlConfig {
     int pca_addr=-1;
     int tps_addr=-1;
 };
+struct ShiftRegConfig {
+    int data = -1;  // serial data pin
+    int clk  = -1;  // shift clock pin (GPIO42 on H752 — JTAG, reset before use)
+    int str  = -1;  // storage/latch strobe pin
+};
   enum class Quality {
     QUALITY_HIGH,
     QUALITY_NORMAL,
@@ -75,6 +80,7 @@ struct PowerCtlConfig {
       int8_t data_pins[8];
       I2CBusConfig i2c{};
       PowerCtlConfig power{};
+      ShiftRegConfig shift{};
       Waveforms waveforms;
 
       // Returns a copy of this config with rotation set — lets you write:
