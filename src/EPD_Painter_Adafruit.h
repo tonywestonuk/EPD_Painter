@@ -61,6 +61,10 @@ public:
     // Call after Serial / I2C setup, before any drawing.
     // -------------------------------------------------------------------------
     bool begin() {
+        bool r = _painter.begin();
+        _painter.setInterlaceMode(true);
+        _config = _painter.getConfig();
+
         const size_t buf_size = (size_t)_config.width * (size_t)_config.height;
 
         buffer = static_cast<uint8_t *>(
@@ -68,9 +72,7 @@ public:
         
         memset(buffer,0x00,_config.width * _config.height);
 
-        _painter.setInterlaceMode(true);
-
-        return _painter.begin();
+        return r;
     }
 
     // -------------------------------------------------------------------------

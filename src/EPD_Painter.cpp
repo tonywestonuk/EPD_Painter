@@ -48,13 +48,30 @@ epd_painter_powerctl *powerctl = nullptr;
 // or auto-detect mode, probing for known I2C signatures of supported boards.
 // =============================================================================
 static void detectBoardType(EPD_Painter::Config &config) {
+  const EPD_Painter::Quality requested_quality = config.quality;
+  const EPD_Painter::Rotation requested_rotation = config.rotation;
+#ifdef ARDUINO
+  TwoWire* requested_wire = config.i2c.wire;
+#endif
+  const uint32_t requested_i2c_freq = config.i2c.freq;
+
+  auto applyResolvedConfig = [&](const EPD_Painter::Config& resolved) {
+    config = resolved;
+    config.quality = requested_quality;
+    config.rotation = requested_rotation;
+    config.i2c.freq = requested_i2c_freq;
+#ifdef ARDUINO
+    config.i2c.wire = requested_wire;
+#endif
+  };
+
   // Only run when the AUTO preset markers are present
   #if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
-  config = EPD_M5S3;
+  applyResolvedConfig(EPD_M5S3);
   #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
-  config = EPD_T5_GPS;
+  applyResolvedConfig(EPD_T5_GPS);
   #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
-  config = EPD_T5_OLD;
+  applyResolvedConfig(EPD_T5_OLD);
   #else
   #ifdef ARDUINO
     if (config.preset != EPD_Painter::Preset::EPD_PAINTER_AUTO) return;
@@ -89,11 +106,11 @@ static void detectBoardType(EPD_Painter::Config &config) {
     }
 
     if (detected == EPD_Painter::Preset::M5STACK_M5PAPER_S3) {
-      config = EPD_M5S3;
+      applyResolvedConfig(EPD_M5S3);
     } else if (detected == EPD_Painter::Preset::LILYGO_T5_S3_GPS) {
-      config = EPD_T5_GPS;
+      applyResolvedConfig(EPD_T5_GPS);
     } else if (detected == EPD_Painter::Preset::LILYGO_T5_S3_OLD) {
-      config = EPD_T5_OLD;
+      applyResolvedConfig(EPD_T5_OLD);
     } else {
       while(1) {
         printf("[EPD] No known board found; using AUTO defaults (may not work)\n");

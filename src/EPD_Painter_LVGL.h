@@ -61,6 +61,9 @@ public:
     // Call after lv_init() and lv_tick_set_cb(), before creating any widgets.
     // -------------------------------------------------------------------------
     bool begin() {
+        // set the variables in case of Auto mode
+        if (!_painter.begin()) return false;
+
         const size_t buf_size = (size_t)_painter.getConfig().width * (size_t)_painter.getConfig().height;
 
         _framebuffer = static_cast<uint8_t *>(
@@ -68,8 +71,6 @@ public:
 
         if (!_framebuffer) return false;
         memset(_framebuffer, 0x00, buf_size);
-
-        if (!_painter.begin()) return false;
 
         _painter.setInterlaceMode(true);
 
