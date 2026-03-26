@@ -5,6 +5,10 @@
 #include <functional>
 #include "EPD_Painter.h"
 
+#ifndef EPD_PAINTER_ENABLE_AUTO_SHUTDOWN
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 0
+#endif
+
 // =============================================================================
 // EPD_PainterShutdown
 //

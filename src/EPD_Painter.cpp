@@ -17,6 +17,7 @@
 #include <soc/gdma_struct.h>
 #include "EPD_Painter.h"
 #include <epd_painter_powerctl.h>
+#include "EPD_Painter_presets.h"
 
 #ifdef ARDUINO
   #include "Wire.h"
@@ -38,76 +39,71 @@ static const uint8_t kDataSignals[8] = {
   LCD_DATA_OUT7_IDX,
 };
 
-
-
 epd_painter_powerctl *powerctl = nullptr;
 
-static const EPD_Painter::Waveforms kLilyGoT5S3GpsWaveforms = {
-  .fast_lighter   = { { 1, 2, 2, 2, 2, 2, 3 },
-                      { 3, 2, 2, 2, 2, 2, 3 },
-                      { 2, 2, 2, 2, 2, 2, 2 } },
-  .fast_darker    = { { 1, 1, 3, 3, 1, 3, 1 },
-                      { 1, 3, 1, 1, 1, 1, 3 },
-                      { 1, 1, 1, 1, 1, 1, 1 } },
-  .normal_lighter = { { 1, 1, 1, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2 },
-                      { 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3 },
-                      { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
-  .normal_darker  = { { 1, 2, 1, 1, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
-                      { 1, 1, 1, 2, 2, 3, 1, 1, 3, 1, 3, 1, 1 },
-                      { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
-  .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
-                      { 1, 1, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },
-                      { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
-  .high_darker    = { { 1, 3, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1 },
-                      { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
-                      { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
-};
 
 // =============================================================================
 // detectBoardType()
-// Called at the start of begin() when EPD_PAINTER_PRESET_LILYGO_T5_S3_AUTO is
-// used.  Probes I2C for PCA9555 at 0x20 on SDA=39, SCL=40.
-// If NOT found, reconfigures 'config' for the older H752 shift-register board.
+// Called at the start of begin() to set the config based on the preset or 
+// or auto-detect mode, probing for known I2C signatures of supported boards.
 // =============================================================================
-#ifdef ARDUINO
 static void detectBoardType(EPD_Painter::Config &config) {
   // Only run when the AUTO preset markers are present
-  if (config.power.pca_addr != 0x20 || config.shift.data != -1) return;
+  #if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
+  config = EPD_M5S3;
+  #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
+  config = EPD_T5_GPS;
+  #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
+  config = EPD_T5_OLD;
+  #else
+  #ifdef ARDUINO
+    if (config.preset != EPD_Painter::Preset::EPD_PAINTER_AUTO) return;
 
-  printf("[EPD] Probing PCA9555 at SDA=39 SCL=40 addr=0x20...\n");
-  TwoWire probe(1);   // use bus 1 just for the probe; will be deleted
-  probe.begin(39, 40, 100000);
-  probe.beginTransmission(0x20);
-  bool found = (probe.endTransmission() == 0);
-  probe.end();
-  config.waveforms = kLilyGoT5S3GpsWaveforms;
+    for (auto& probe : Probe) {
+      probe.found = false;
+    }
 
-  if (found) {
-    printf("[EPD] PCA9555 found — using GPS board config\n");
-  } else {
-    printf("[EPD] PCA9555 NOT found — switching to H752 shift-register config\n");
-    // Overwrite all board-specific fields
-    config.pin_sph         = 9;
-    config.pin_oe          = -1;
-    config.pin_cl          = 10;
-    config.pin_spv         = -1;
-    config.pin_ckv         = 39;
-    config.pin_le          = -1;
-    config.pin_pwr         = -1;
-    config.data_pins[0]    = 11; config.data_pins[1] = 12;
-    config.data_pins[2]    = 13; config.data_pins[3] = 14;
-    config.data_pins[4]    = 21; config.data_pins[5] = 47;
-    config.data_pins[6]    = 45; config.data_pins[7] = 38;
-    config.i2c.sda         = 6;
-    config.i2c.scl         = 5;
-    config.power.pca_addr  = -1;
-    config.power.tps_addr  = -1;
-    config.shift.data      = 2;
-    config.shift.clk       = 42;
-    config.shift.str       = 1;
-  }
+    int i = 1;
+    for (auto& probe : Probe) {
+      printf("[EPD] Probing board %d on SDA=%d, SCL=%d, addr=0x%x\n", i, probe.i2c_sda, probe.i2c_scl, probe.i2c_addr);
+      TwoWire _w(1);   // use bus 1 just for the probe; will be deleted
+      _w.begin(probe.i2c_sda, probe.i2c_scl, 100000);
+      _w.beginTransmission(probe.i2c_addr);
+      bool found = (_w.endTransmission() == 0);
+      _w.end();
+      if(found) {
+        printf("[EPD] Board %d found\n", i);
+        probe.found = true;
+        break;
+      }
+      i++;
+      EPD_DELAY_MS(50);
+    }
+
+    EPD_Painter::Preset detected = EPD_Painter::Preset::EPD_PAINTER_AUTO;
+    for (const auto& probe : Probe) {
+      if (probe.found) {
+        detected = probe.preset;
+        break;
+      }
+    }
+
+    if (detected == EPD_Painter::Preset::M5STACK_M5PAPER_S3) {
+      config = EPD_M5S3;
+    } else if (detected == EPD_Painter::Preset::LILYGO_T5_S3_GPS) {
+      config = EPD_T5_GPS;
+    } else if (detected == EPD_Painter::Preset::LILYGO_T5_S3_OLD) {
+      config = EPD_T5_OLD;
+    } else {
+      while(1) {
+        printf("[EPD] No known board found; using AUTO defaults (may not work)\n");
+        EPD_DELAY_MS(1000);
+      }
+    }
+  #endif  
+  #endif
 }
-#endif
+
 
 // Assembly routines — see EPD_Painter.S for full documentation
 extern "C" void epd_painter_compact_pixels(
@@ -299,10 +295,8 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
 // =============================================================================
 bool EPD_Painter::begin() {
 
-  // ---- Auto-detect board variant (GPS vs H752) when using AUTO preset ----
-#ifdef ARDUINO
+  // ---- Auto-detect board variant, set config based on Macro or auto detect ----
   detectBoardType(_config);
-#endif
 
   // ---- Start I2C if needed (GPS board only; H752 has scl=-1) ----
 #ifdef ARDUINO

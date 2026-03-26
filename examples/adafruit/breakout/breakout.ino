@@ -8,8 +8,13 @@
 //#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
-#include "EPD_Painter_Adafruit.h"
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 1
+// Optional library flag used by the examples.
+// Set to 1 to enable the reset-twice auto-shutdown helper and shutdown image flow.
+// Leave it undefined or set it to 0 in normal projects unless you explicitly want this behaviour.
+
 #include "EPD_Painter_presets.h"
+#include "EPD_Painter_Adafruit.h"
 
 #define XPOWERS_CHIP_BQ25896
 #include <XPowersLib.h>

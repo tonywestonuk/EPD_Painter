@@ -6,13 +6,34 @@
 #include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <LittleFS.h>
+#include <esp_partition.h>
 #endif
 
 extern "C" void epd_painter_compact_pixels(const uint8_t* input, uint8_t* output, uint32_t size);
 
-#ifdef ARDUINO
+#if defined(ARDUINO) && EPD_PAINTER_ENABLE_AUTO_SHUTDOWN
 
 static const char* IMG_PATH = "/.epd_painter_shutdown.img";
+
+static bool hasShutdownFilesystemPartition() {
+  if (esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr)) {
+    return true;
+  }
+#ifdef ESP_PARTITION_SUBTYPE_DATA_LITTLEFS
+  if (esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_LITTLEFS, nullptr)) {
+    return true;
+  }
+#endif
+  return false;
+}
+
+static bool mountShutdownFs(bool formatOnFail) {
+  if (!hasShutdownFilesystemPartition()) {
+    Serial.println("Shutdown: no SPIFFS/LittleFS partition found");
+    return false;
+  }
+  return formatOnFail ? LittleFS.begin(true) : LittleFS.begin(false);
+}
 
 
 // ---------------------------------------------------------------------------
@@ -240,7 +261,8 @@ EPD_PainterShutdown::EPD_PainterShutdown(EPD_Painter* p_epd) {
 
   const auto cfg = _epd->getConfig();
   const size_t packed_size = (size_t)cfg.width * cfg.height / 4;
-  if (LittleFS.begin(false) && LittleFS.exists(IMG_PATH)) {
+  if (mountShutdownFs(false)) {
+    if(!LittleFS.exists(IMG_PATH)) return;  // no image, skip
     uint8_t* packed = (uint8_t*)heap_caps_malloc(packed_size, MALLOC_CAP_SPIRAM);
     if (packed) {
       File f = LittleFS.open(IMG_PATH, FILE_READ);
@@ -271,7 +293,7 @@ void EPD_PainterShutdown::proceed() {
 
   const auto cfg = _epd->getConfig();
   const size_t packed_size = (size_t)cfg.width * cfg.height / 4;
-  bool fsOk = LittleFS.begin(false) || LittleFS.begin(true);
+  bool fsOk = mountShutdownFs(false) || mountShutdownFs(true);
 
   if (!fsOk) {
     Serial.println("LittleFS unavailable — painting Mandelbrot directly");
@@ -363,7 +385,7 @@ void EPD_PainterShutdown::cancel() {
   Serial.println("Shutdown cancelled. Re-armed for next reset.");
 }
 
-#else  // !ARDUINO — ESP-IDF stubs (shutdown feature not used in ESP-IDF builds)
+#else  // !ARDUINO or shutdown feature disabled
 
 extern "C" void epd_painter_compact_pixels(const uint8_t*, uint8_t*, uint32_t);
 

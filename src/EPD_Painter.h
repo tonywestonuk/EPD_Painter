@@ -55,6 +55,13 @@ struct ShiftRegConfig {
     ROTATION_CW   // 90° clockwise — portrait drawing canvas (width↔height swapped)
   };
 
+  enum class Preset {
+    EPD_PAINTER_AUTO,   // auto-detect GPS vs H752 variant
+    M5STACK_M5PAPER_S3, // M5Paper S3
+    LILYGO_T5_S3_GPS,   // newer GPS-board variant with PCA9555
+    LILYGO_T5_S3_OLD,   // older H752-board variant with shift reg
+  };
+
   struct Waveforms {
       uint8_t fast_lighter[3][7];
       uint8_t fast_darker[3][7];
@@ -65,6 +72,7 @@ struct ShiftRegConfig {
   };
 
   struct Config {
+      Preset preset;
       uint16_t width;
       uint16_t height;
       int8_t pin_pwr;
@@ -86,6 +94,14 @@ struct ShiftRegConfig {
       // Returns a copy of this config with rotation set — lets you write:
       //   EPD_PainterAdafruit epd(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
       Config withRotation(Rotation r) const { Config c = *this; c.rotation = r; return c; }
+  };
+
+  struct ProbeSettings {
+    Preset preset;
+    int i2c_sda;
+    int i2c_scl;
+    int i2c_addr;
+    bool found = false;
   };
 
 

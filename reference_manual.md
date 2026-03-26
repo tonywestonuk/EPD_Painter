@@ -14,7 +14,37 @@ Add one of these `#define`s before your includes:
 #define EPD_PAINTER_PRESET_M5PAPER_S3
 // or
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+// or
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 ```
+
+If you do not define a fixed board preset, `EPD_Painter_presets.h` uses the `AUTO` preset and the driver probes known I2C signatures at startup.
+
+Current auto-detect order:
+
+1. LilyGo T5 S3 GPS / H752-1 via PCA9555 on `SDA=39`, `SCL=40`, address `0x20`
+2. LilyGo T5 S3 H752 via GT911/BM8563 bus on `SDA=6`, `SCL=5`
+3. M5Paper S3 via touch/RTC bus on `SDA=41`, `SCL=42`
+
+If a match is found, the corresponding board config is loaded automatically before `begin()` finishes.
+
+### 1.1 Optional feature flags
+
+Examples in this repository explicitly enable the reset-twice auto-shutdown helper:
+
+```cpp
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 1
+```
+
+This flag is **disabled by default** for normal library use in external projects.
+
+Enable it only if you want EPD_Painter to:
+
+- arm a reset-twice shutdown flow
+- optionally read or generate a shutdown image
+- power the board off at the end of that flow
+
+Leave it undefined, or set it to `0`, if you do not want the library to manage shutdown behaviour.
 
 ### 2. Choose a binding
 
@@ -130,6 +160,13 @@ In short: four shades is the sweet spot where the pixel format and the waveform 
 
 ## Shutdown Image
 
+The shutdown helper is available only when `EPD_PAINTER_ENABLE_AUTO_SHUTDOWN` is set to `1` before including the EPD_Painter headers.
+
+```cpp
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 1
+#include "EPD_Painter_presets.h"
+```
+
 When the board powers off, EPD_Painter displays a static image from LittleFS:
 
 ```
@@ -137,6 +174,40 @@ When the board powers off, EPD_Painter displays a static image from LittleFS:
 ```
 
 If this file is not present, a Mandelbrot fractal is generated and shown as a fallback.
+
+### Filesystem requirements
+
+The shutdown helper only attempts to mount `LittleFS` when a compatible data partition exists in the flash partition table.
+
+Accepted partition subtypes:
+
+- `SPIFFS`
+- `LITTLEFS`
+
+If neither partition exists, the shutdown helper skips filesystem mounting and falls back to the in-memory Mandelbrot path instead of producing a mount error.
+
+### Enabling or disabling auto-shutdown
+
+Enable:
+
+```cpp
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 1
+#include "EPD_Painter_presets.h"
+```
+
+Disable:
+
+```cpp
+// Leave the flag undefined, or define it as 0
+#define EPD_PAINTER_ENABLE_AUTO_SHUTDOWN 0
+#include "EPD_Painter_presets.h"
+```
+
+When disabled:
+
+- the shutdown helper becomes a no-op
+- no reset-twice shutdown state is armed
+- no `LittleFS` access is attempted by the library
 
 ### File format
 
