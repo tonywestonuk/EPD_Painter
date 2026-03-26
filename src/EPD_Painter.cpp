@@ -422,7 +422,7 @@ bool EPD_Painter::begin() {
   const size_t packed_size = (_config.width * _config.height) / 4;
 
   packed_fastbuffer = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
 
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));

@@ -214,17 +214,11 @@ void loop() {
  // long time = esp_timer_get_time();
 
 
-  epd.setCursor(30,500);
-  epd.print("Turn off by pressing Boot button.");
+  //epd.setCursor(30,500);
+  //epd.print("Turn off by pressing Boot button.");
 
   epd.paint();
  Serial.println(1000000.0/(esp_timer_get_time()-time));
 
-#ifdef EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-  if (digitalRead(0) == 0) {
-   Serial.println("shutdown");
-   epd.clear();
-   PPM.shutdown();
- }
-#endif
+
 }
