@@ -220,6 +220,10 @@ EPD_Painter::EPD_Painter(const Config &config, bool portrait) {
   if (portrait) _config.rotation = Rotation::ROTATION_CW;
 }
 
+static inline bool uses_shift_register_control(const EPD_Painter::Config& config) {
+  return config.shift.data >= 0;
+}
+
 
 void EPD_Painter::setQuality(Quality quality) {
   _config.quality = quality;
@@ -229,6 +233,7 @@ void EPD_Painter::setQuality(Quality quality) {
 // sendRow()
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
+  const bool shift_board = uses_shift_register_control(_config);
 
   // Wait for LCD peripheral to finish consuming the previous row.
   // This also guarantees the previously-started DMA transfer is complete,
@@ -252,7 +257,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   }
 
   if (firstLine) {
-    if (_config.pin_spv >= 0) {
+    if (!shift_board) {
       // Direct GPIO SPV pulse
       gpio_clear_fast(_config.pin_spv);
       gpio_clear_fast(_config.pin_ckv);
@@ -268,7 +273,7 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
       powerctl->sr_set_stv(true);
     }
   } else {
-    if (_config.pin_le >= 0) {
+    if (!shift_board) {
       // Direct GPIO LE pulse
       gpio_set_fast(_config.pin_le);
       gpio_clear_fast(_config.pin_le);
@@ -294,13 +299,12 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     while (LCD_CAM.lcd_user.lcd_start) {}
 
     gpio_clear_fast(_config.pin_ckv);
-    if (_config.pin_le >= 0) {
+    if (!shift_board) {
       gpio_set_fast(_config.pin_le);
       EPD_DELAY_US(1);
       gpio_clear_fast(_config.pin_le);
     } else {
       powerctl->sr_set_le(true);
-      EPD_DELAY_US(1);
       powerctl->sr_set_le(false);
     }
     gpio_set_fast(_config.pin_ckv);
@@ -495,7 +499,9 @@ bool EPD_Painter::end() {
 // Power control
 // =============================================================================
 void EPD_Painter::powerOn() {
-  if (_config.pin_spv >= 0) EPD_PIN_LOW(_config.pin_spv);
+  const bool shift_board = uses_shift_register_control(_config);
+
+  if (!shift_board) EPD_PIN_LOW(_config.pin_spv);
   EPD_PIN_LOW(_config.pin_sph);
 
   if (powerctl) {
@@ -508,11 +514,11 @@ void EPD_Painter::powerOn() {
   }
 
   // SPV (ep_stv) for H752 is already asserted by powerctl->powerOn() via shift reg.
-  if (_config.pin_spv >= 0) gpio_clear_fast(_config.pin_spv);
+  if (!shift_board) gpio_clear_fast(_config.pin_spv);
   gpio_clear_fast(_config.pin_ckv);
   EPD_DELAY_US(1);
   gpio_set_fast(_config.pin_ckv);
-  if (_config.pin_spv >= 0) gpio_set_fast(_config.pin_spv);
+  if (!shift_board) gpio_set_fast(_config.pin_spv);
 }
 
 void EPD_Painter::powerOff() {

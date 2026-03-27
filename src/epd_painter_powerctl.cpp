@@ -1,25 +1,11 @@
 #include "epd_painter_powerctl.h"
 #include <stdio.h>
-#include <soc/gpio_reg.h>
 
 #ifndef ARDUINO
   #include "freertos/FreeRTOS.h"
   #include "freertos/task.h"
 #endif
 
-// ---------------------------------------------------------------------------
-// IRAM-safe GPIO helpers (direct register writes, no flash access)
-// ---------------------------------------------------------------------------
-static IRAM_ATTR inline void iram_pin_set(int pin) {
-    if (pin < 32) REG_WRITE(GPIO_OUT_W1TS_REG,  1UL << pin);
-    else          REG_WRITE(GPIO_OUT1_W1TS_REG, 1UL << (pin - 32));
-}
-static IRAM_ATTR inline void iram_pin_clr(int pin) {
-    if (pin < 32) REG_WRITE(GPIO_OUT_W1TC_REG,  1UL << pin);
-    else          REG_WRITE(GPIO_OUT1_W1TC_REG, 1UL << (pin - 32));
-}
-
-// ---------------------------------------------------------------------------
 epd_painter_powerctl::epd_painter_powerctl() {
   _pca_out[0] = 0x00;
   _pca_out[1] = 0x00;
@@ -83,58 +69,16 @@ void epd_painter_powerctl::sr_push_slow() {
 }
 
 // ---------------------------------------------------------------------------
-// Shift-register push — fast IRAM-safe version (direct GPIO register writes)
-//
-// 74HCT4094D timing requirements at 5V (3.3V operation is slightly slower):
-//   tsu  (DATA setup before CLK rising) = 20ns min
-//   th   (DATA hold after  CLK rising)  = 5ns  min
-//   tw   (CLK pulse width high/low)     = 15ns min
-//
-// At 240 MHz, one REG_WRITE = ~4 ns.  We insert 6 NOP pairs (~50 ns) around
-// the CLK rising edge to satisfy tsu and th with comfortable margin.
-// ---------------------------------------------------------------------------
-#define SR_NOP6  __asm volatile("nop;nop;nop;nop;nop;nop;" ::: "memory")
-
-void IRAM_ATTR epd_painter_powerctl::sr_push_fast() {
-  const int data = config.shift.data;
-  const int clk  = config.shift.clk;
-  const int str  = config.shift.str;
-
-  uint8_t byte =
-    (_sr.ep_output_enable  ? 0x80 : 0) |
-    (_sr.ep_mode           ? 0x40 : 0) |
-    (_sr.ep_scan_direction ? 0x20 : 0) |
-    (_sr.ep_stv            ? 0x10 : 0) |
-    (_sr.neg_power_enable  ? 0x08 : 0) |
-    (_sr.pos_power_enable  ? 0x04 : 0) |
-    (_sr.power_disable     ? 0x02 : 0) |
-    (_sr.ep_latch_enable   ? 0x01 : 0);
-
-  iram_pin_clr(str);
-  for (int i = 7; i >= 0; i--) {
-    iram_pin_clr(clk);          // CLK low  (~4 ns)
-    SR_NOP6;                     // hold low (~25 ns)
-    if ((byte >> i) & 1) iram_pin_set(data);
-    else                  iram_pin_clr(data);
-    SR_NOP6;                     // DATA setup time >= 25 ns  (> 20 ns required)
-    iram_pin_set(clk);           // CLK rising edge — latch bit
-    SR_NOP6;                     // DATA hold time  >= 25 ns  (> 5 ns required)
-  }
-  iram_pin_clr(clk);
-  iram_pin_set(str);             // STR rising edge — latch byte to outputs
-}
-
-// ---------------------------------------------------------------------------
-// IRAM-safe hot-path controls (called from sendRow)
+// Hot-path controls (called from sendRow)
 // ---------------------------------------------------------------------------
 void IRAM_ATTR epd_painter_powerctl::sr_set_le(bool val) {
   _sr.ep_latch_enable = val;
-  sr_push_fast();
+  sr_push_slow();
 }
 
 void IRAM_ATTR epd_painter_powerctl::sr_set_stv(bool val) {
   _sr.ep_stv = val;
-  sr_push_fast();
+  sr_push_slow();
 }
 
 // ---------------------------------------------------------------------------
@@ -193,15 +137,12 @@ bool epd_painter_powerctl::powerOn() {
     _sr.ep_scan_direction = true;
     _sr.power_disable = false;
     sr_push_slow();
-    EPD_DELAY_MS(100);
+    EPD_DELAY_US(100);
 
     _sr.neg_power_enable = true;
-    sr_push_slow();
-    EPD_DELAY_MS(500);
-
     _sr.pos_power_enable = true;
     sr_push_slow();
-    EPD_DELAY_MS(100);
+    EPD_DELAY_US(100);
 
     _sr.ep_stv            = true;
     _sr.ep_output_enable  = true;
@@ -231,12 +172,9 @@ void epd_painter_powerctl::powerOff() {
 
   } else if (config.shift.data >= 0) {
     _sr.pos_power_enable = false;
-    sr_push_slow();
-    EPD_DELAY_MS(10);
-
     _sr.neg_power_enable = false;
     sr_push_slow();
-    EPD_DELAY_MS(100);
+    EPD_DELAY_US(100);
 
     _sr.ep_stv           = false;
     _sr.ep_output_enable = false;

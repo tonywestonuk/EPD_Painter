@@ -2,8 +2,6 @@
 
 #include "build_opt.h"
 #include <EPD_Painter.h>
-#include <hal/gpio_ll.h>
-
 class epd_painter_powerctl {
 public:
   epd_painter_powerctl();
@@ -44,8 +42,6 @@ private:
 
   // Push _sr to the 74HCT4094D via bit-banging (slow, uses digitalWrite)
   void sr_push_slow();
-  // Push _sr via direct GPIO register writes (IRAM-safe, fast)
-  void IRAM_ATTR sr_push_fast();
 
   // ---- PCA9535 cached state ----
   uint8_t _pca_out[2];
