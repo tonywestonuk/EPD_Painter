@@ -391,10 +391,6 @@ bool EPD_Painter::begin() {
   xTaskCreatePinnedToCore(
     _paint_task_entry, "epd_paint", 8000, this, 10, &_paint_task_h, 0);
 
-
-  // Clear previous screen, to keep DC balance.
-  clear();
-
   if (_autoShutdown) {
     EPD_BootCtl boot(*this);
     if (boot.shutdownPending()) boot.shutdown();  // [[noreturn]] on shutdown path
