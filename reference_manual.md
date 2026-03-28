@@ -1,6 +1,6 @@
 # EPD_Painter Reference Manual
 
-A high-performance e-paper display driver for ESP32-S3 boards (M5PaperS3, LilyGo T5 S3 GPS).
+A high-performance e-paper display driver for ESP32-S3 boards (M5PaperS3, LilyGo T5 S3 GPS, Lilygo T5 S3 H752 model).
 
 ---
 
@@ -14,6 +14,8 @@ Add one of these `#define`s before your includes:
 #define EPD_PAINTER_PRESET_M5PAPER_S3
 // or
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+// or
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 ```
 
 ### 2. Choose a binding

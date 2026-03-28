@@ -58,3 +58,32 @@ private:
   bool tpsWrite16(uint8_t reg, uint8_t lo, uint8_t hi);
   bool tpsRead(uint8_t reg, uint8_t& val);
 };
+
+class epd_painter_powerctl_74HCT4094D {
+public:
+  epd_painter_powerctl_74HCT4094D();
+
+  bool begin(EPD_Painter::Config config);
+
+  bool powerOn();
+  void powerOff();
+
+  void IRAM_ATTR sr_set_le(bool val);
+  void IRAM_ATTR sr_set_stv(bool val);
+
+private:
+  EPD_Painter::Config config;
+
+  struct ShiftState {
+    bool power_disable     = true;
+    bool pos_power_enable  = false;
+    bool neg_power_enable  = false;
+    bool ep_scan_direction = true;
+    bool ep_output_enable  = false;
+    bool ep_mode           = false;
+    bool ep_stv            = false;
+    bool ep_latch_enable   = false;
+  } _sr;
+
+  void sr_push_bits();
+};

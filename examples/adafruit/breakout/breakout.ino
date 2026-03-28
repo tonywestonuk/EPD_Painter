@@ -5,6 +5,7 @@
 
 // Pick a board...
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 //#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
