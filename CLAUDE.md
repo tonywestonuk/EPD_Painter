@@ -30,8 +30,8 @@ There is no Makefile, CMake, or CLI build system — Arduino IDE is the primary 
 - `src/EPD_Painter.S` — **Xtensa assembly**: all pixel packing, waveform conversion, `ink_on`/`ink_off` delta detection, 64-pixel SIMD chunks
 - `src/EPD_Painter_Adafruit.h` — Wrapper exposing Adafruit GFX API; owns 8bpp framebuffer in PSRAM
 - `src/EPD_Painter_LVGL.h` — LVGL v9 integration: flush callback + paint timer
-- `src/EPD_Painter_presets.h` — Board pin/I2C presets (`EPD_PAINTER_PRESET_M5PAPER_S3`, `EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS`)
-- `src/epd_painter_powerctl.h/.cpp` — TPS65185 PMIC + PCA9555 IO expander control over I2C
+- `src/EPD_Painter_presets.h` — Board pin/I2C presets (`EPD_PAINTER_PRESET_M5PAPER_S3`, `EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS`, `EPD_PAINTER_PRESET_LILYGO_T5_S3_H752`)
+- `src/epd_painter_powerctl.h/.cpp` — TPS65185 PMIC + PCA9555 IO expander control over I2C or shift register 74HCT4094D
 - `src/build_opt.h` — HAL macros for Arduino vs ESP-IDF compatibility
 
 ### Board Presets
@@ -40,6 +40,7 @@ Enable via `#define` before including the library:
 ```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3        // 960×540, pins 6,14,7,12,9,11,8,10
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS  // 960×540, pins 5,6,7,15,16,17,18,8
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752 // 960x540, pins 5,6,7,15,16,17,18,8
 ```
 
 ### Delta Update System
@@ -65,6 +66,12 @@ Enable via `#define` before including the library:
 - **I2C**: SDA=39, SCL=40
 - **Devices**: 0x20 (PCA9555), 0x51 (PCF8563 RTC), 0x55 (BQ27220 PMU), 0x5D (GT911 touch), 0x6B (BQ25896 charger)
 - **GPS power**: PCA9555 port 0 bit 0 HIGH (`REG_CONFIG_P0=0xFE`, `REG_OUTPUT_P0=0xFF`)
+
+## Hardware: LilyGo T5 S3 H752 version
+
+- **I2C**: SDA=6, SCL=5
+- **Devices**: 0x51 (PCF8563 RTC), 0x55 (BQ27220 PMU), 0x5D (GT911 touch), 0x6B (BQ25896 charger)
+
 
 ## Technical Reference
 

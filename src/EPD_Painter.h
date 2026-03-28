@@ -60,9 +60,9 @@ struct PowerCtlConfig {
   };
 
   struct Shift {
-    int8_t data;
-    int8_t clk; 
-    int8_t strobe;
+    int8_t data   = -1;
+    int8_t clk    = -1; 
+    int8_t strobe = -1;
   };
 
 

@@ -1,6 +1,7 @@
 // Choose your board.
 //#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#define EPD_PAINTER_PRESET_M5PAPER_S3
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
+//#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
 #include "EPD_Painter_Adafruit.h"
@@ -251,6 +252,7 @@ static void drawPage2(EPD_PainterAdafruit& epd) {
 static void showPage(int page) {
     epd.clear();
     epd.clear();
+    epd.clear();
 
     if (page == 1) {
         Serial.println("Drawing page 1...");
@@ -274,11 +276,8 @@ void setup() {
         Serial.println("EPD init failed");
         while (1);
     }
+    //epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
     //epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
-    //epd.clear();
-    //epd.clear();
-    //epd.clear();
-
 
     showPage(currentPage);
 }
@@ -301,5 +300,6 @@ void loop() {
             delay(50);
         }
     }
+    delay(100); // avoid watchdog trigger
 #endif
 }

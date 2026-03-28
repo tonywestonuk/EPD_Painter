@@ -1,8 +1,9 @@
 // Pixel Post Controller – effect/channel selector UI for pixel LED systems.
 // Board: LilyGo T5 S3 GPS
 
-//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#define EPD_PAINTER_PRESET_M5PAPER_S3
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
+//#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
 #include <lvgl.h>

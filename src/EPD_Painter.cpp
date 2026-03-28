@@ -39,6 +39,7 @@ static const uint8_t kDataSignals[8] = {
 };
 
 epd_painter_powerctl *powerctl = nullptr;
+epd_painter_powerctl_74HCT4094D *shiftctl = nullptr;
 uint8_t shiftReg = 0;
 
 // Assembly routines — see EPD_Painter.S for full documentation
@@ -148,7 +149,7 @@ void EPD_Painter::setQuality(Quality quality) {
 // sendRow()
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
-
+  (void)skipRow;
   // Wait for LCD peripheral to finish consuming the previous row.
   // This also guarantees the previously-started DMA transfer is complete,
   // since the LCD FIFO cannot drain faster than DMA fills it.
@@ -171,18 +172,34 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   }
 
   if (firstLine) {
-    gpio_clear_fast(_config.pin_spv);
-    gpio_clear_fast(_config.pin_ckv);
-    EPD_DELAY_US(1);
-    gpio_set_fast(_config.pin_ckv);
-    gpio_set_fast(_config.pin_spv);
-  } else {
+    if(shiftctl){
+      shiftctl->sr_set_stv(false);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+      shiftctl->sr_set_stv(true);
+    } else {
+      gpio_clear_fast(_config.pin_spv);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+      gpio_set_fast(_config.pin_spv);
+    }
 
-    gpio_set_fast(_config.pin_le);
-    gpio_clear_fast(_config.pin_le);
-    gpio_clear_fast(_config.pin_ckv);
-    EPD_DELAY_US(1);
-    gpio_set_fast(_config.pin_ckv);
+  } else {
+    if(shiftctl){
+      shiftctl->sr_set_le(true);
+      shiftctl->sr_set_le(false);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+    } else {
+      gpio_set_fast(_config.pin_le);
+      gpio_clear_fast(_config.pin_le);
+      gpio_clear_fast(_config.pin_ckv);
+      EPD_DELAY_US(1);
+      gpio_set_fast(_config.pin_ckv);
+    }
   }
 
   // Reset ownership, flush AFIFO, and restart GDMA from the correct descriptor.
@@ -196,11 +213,18 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
   if (lastLine) {
     while (LCD_CAM.lcd_user.lcd_start) {}
 
-    gpio_clear_fast(_config.pin_ckv);
-    gpio_set_fast(_config.pin_le);
-    EPD_DELAY_US(1);
-    gpio_clear_fast(_config.pin_le);
-    gpio_set_fast(_config.pin_ckv);
+    if(shiftctl){
+      gpio_clear_fast(_config.pin_ckv);
+      shiftctl->sr_set_le(true);
+      shiftctl->sr_set_le(false);
+      gpio_set_fast(_config.pin_ckv);
+    } else {
+      gpio_clear_fast(_config.pin_ckv);
+      gpio_set_fast(_config.pin_le);
+      EPD_DELAY_US(1);
+      gpio_clear_fast(_config.pin_le);
+      gpio_set_fast(_config.pin_ckv);
+    }
   }
 }
 
@@ -223,13 +247,13 @@ bool EPD_Painter::begin() {
 
 
   // ---- Configure EPD control pins ----
-  // pin_pwr and pin_oe are -1 when managed by powerctl (e.g. LilyGo via PCA9555/TPS65185)
+  // Pins managed by powerctl (PCA9555 or shift register) are set to -1.
   if (_config.pin_pwr >= 0) EPD_PIN_OUTPUT(_config.pin_pwr);
-  EPD_PIN_OUTPUT(_config.pin_spv);
+  if (_config.pin_spv >= 0) EPD_PIN_OUTPUT(_config.pin_spv);
   EPD_PIN_OUTPUT(_config.pin_ckv);
   EPD_PIN_OUTPUT(_config.pin_sph);
-  if (_config.pin_oe >= 0) EPD_PIN_OUTPUT(_config.pin_oe);
-  EPD_PIN_OUTPUT(_config.pin_le);
+  if (_config.pin_oe  >= 0) EPD_PIN_OUTPUT(_config.pin_oe);
+  if (_config.pin_le  >= 0) EPD_PIN_OUTPUT(_config.pin_le);
   EPD_PIN_OUTPUT(_config.pin_cl);
 
 
@@ -349,6 +373,13 @@ bool EPD_Painter::begin() {
       while (1) EPD_DELAY_MS(1000);
     }
   }
+  // ── If a shift register is present, initialise the shift controller ──
+  if( _config.shift.data >= 0) {
+    shiftctl = new epd_painter_powerctl_74HCT4094D();
+    if (shiftctl != nullptr) {
+      shiftctl->begin(_config);
+    }
+  }
 
   if (!(dma_buffer && packed_fastbuffer && packed_screenbuffer)) return false;
 
@@ -397,10 +428,14 @@ bool EPD_Painter::end() {
 // Power control
 // =============================================================================
 void EPD_Painter::powerOn() {
-  EPD_PIN_LOW(_config.pin_spv);
+  if (!shiftctl) {
+    EPD_PIN_LOW(_config.pin_spv);
+  }
   EPD_PIN_LOW(_config.pin_sph);
 
-  if (powerctl) {
+  if (shiftctl) {
+    shiftctl->powerOn();
+  } else if (powerctl) {
     powerctl->powerOn();
   } else {
     EPD_PIN_HIGH(_config.pin_oe);
@@ -409,17 +444,23 @@ void EPD_Painter::powerOn() {
     EPD_DELAY_US(100);
   }
 
-  gpio_clear_fast(_config.pin_spv);
+  if (!shiftctl) {
+    gpio_clear_fast(_config.pin_spv);
+  }
   gpio_clear_fast(_config.pin_ckv);
   EPD_DELAY_US(1);
 
   gpio_set_fast(_config.pin_ckv);
-  gpio_set_fast(_config.pin_spv);
+  if (!shiftctl) {
+    gpio_set_fast(_config.pin_spv);
+  }
 }
 
 void EPD_Painter::powerOff() {
   if (powerctl) {
     powerctl->powerOff();
+  } else if (shiftctl) {
+    shiftctl->powerOff();
   } else {
     EPD_PIN_LOW(_config.pin_oe);
     EPD_DELAY_US(100);

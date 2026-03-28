@@ -1,5 +1,6 @@
 #include "epd_painter_powerctl.h"
 #include <stdio.h>
+#include <hal/gpio_hal.h>
 
 #ifndef ARDUINO
   #include "freertos/FreeRTOS.h"
@@ -20,12 +21,12 @@ bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
   // I2C not used in ESP-IDF builds
 
   // ---- Configure PCA9535: pins 8-13 outputs, 14-15 inputs ----
-  for (int pin = 8; pin <= 13; ++pin) {
-    if (!pcaPinMode(pin, PCA_OUTPUT)) {
-      printf("[PWRCTL] Failed setting PCA pin %d OUTPUT\n", pin);
-      return false;
+    for (int pin = 8; pin <= 13; ++pin) {
+      if (!pcaPinMode(pin, PCA_OUTPUT)) {
+        printf("[PWRCTL] Failed setting PCA pin %d OUTPUT\n", pin);
+        return false;
+      }
     }
-  }
   if (!pcaPinMode(14, PCA_INPUT)) {
     printf("[PWRCTL] Failed setting PCA pin 14 INPUT\n");
     return false;
@@ -243,4 +244,121 @@ bool epd_painter_powerctl::tpsRead(uint8_t reg, uint8_t& val) {
 #else
   return false;  // I2C not used in ESP-IDF builds
 #endif
+}
+
+//#define EPD_DEBUG_REGISTERS
+#ifdef EPD_DEBUG_REGISTERS
+#define EPD_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define EPD_DEBUG_PRINT(...)
+#endif
+
+epd_painter_powerctl_74HCT4094D::epd_painter_powerctl_74HCT4094D() {}
+
+bool epd_painter_powerctl_74HCT4094D::begin(EPD_Painter::Config cfg) {
+  config = cfg;
+  gpio_reset_pin((gpio_num_t)config.shift.clk);
+  EPD_PIN_OUTPUT(config.shift.data);
+  EPD_PIN_OUTPUT(config.shift.clk);
+  EPD_PIN_OUTPUT(config.shift.strobe);
+  EPD_PIN_LOW(config.shift.strobe);
+  _sr = ShiftState{};
+  sr_push_bits();
+  EPD_DEBUG_PRINT("[PWRCTL] Shift-reg init OK (DATA=%d CLK=%d STR=%d)\n",
+                  config.shift.data, config.shift.clk, config.shift.strobe);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// IRAM-safe GPIO helpers (direct register writes, no flash access)
+// ---------------------------------------------------------------------------
+static IRAM_ATTR inline void iram_pin_set(int pin) {
+    if (pin < 32) REG_WRITE(GPIO_OUT_W1TS_REG,  1UL << pin);
+    else          REG_WRITE(GPIO_OUT1_W1TS_REG, 1UL << (pin - 32));
+}
+static IRAM_ATTR inline void iram_pin_clr(int pin) {
+    if (pin < 32) REG_WRITE(GPIO_OUT_W1TC_REG,  1UL << pin);
+    else          REG_WRITE(GPIO_OUT1_W1TC_REG, 1UL << (pin - 32));
+}
+
+void epd_painter_powerctl_74HCT4094D::sr_push_bits() {
+// ---------------------------------------------------------------------------
+// 74HCT4094D timing requirements at 5V (3.3V operation is slightly slower):
+//   tsu  (DATA setup before CLK rising) = 20ns min
+//   th   (DATA hold after  CLK rising)  = 5ns  min
+//   tw   (CLK pulse width high/low)     = 15ns min
+//
+// At 240 MHz, one REG_WRITE or NOP = ~4 ns.
+// ---------------------------------------------------------------------------
+#define SR_NOP6  __asm volatile("nop;nop;nop;nop;nop;nop;" ::: "memory")
+#define SR_NOP2  __asm volatile("nop;nop;" ::: "memory")
+
+  const int data = config.shift.data;
+  const int clk  = config.shift.clk;
+  const int str  = config.shift.strobe;
+
+  uint8_t byte =
+    (_sr.ep_output_enable  ? 0x80 : 0) |
+    (_sr.ep_mode           ? 0x40 : 0) |
+    (_sr.ep_scan_direction ? 0x20 : 0) |
+    (_sr.ep_stv            ? 0x10 : 0) |
+    (_sr.neg_power_enable  ? 0x08 : 0) |
+    (_sr.pos_power_enable  ? 0x04 : 0) |
+    (_sr.power_disable     ? 0x02 : 0) |
+    (_sr.ep_latch_enable   ? 0x01 : 0);
+
+  iram_pin_clr(str);
+  for (int i = 7; i >= 0; i--) {
+    iram_pin_clr(clk);           // CLK low  (~4 ns)
+    SR_NOP2;                     // hold low (~9 ns)
+    if ((byte >> i) & 1) iram_pin_set(data);
+    else                  iram_pin_clr(data);
+    SR_NOP6;                     // DATA setup time ~25 ns  (> 20 ns required)
+    iram_pin_set(clk);           // CLK rising edge — latch bit
+    SR_NOP2;                     // DATA hold time   ~9 ns  (> 5 ns required)
+  }
+  iram_pin_clr(clk);
+  iram_pin_set(str);             // STR rising edge — latch byte to outputs
+
+}
+
+void IRAM_ATTR epd_painter_powerctl_74HCT4094D::sr_set_le(bool val) {
+  _sr.ep_latch_enable = val;
+  sr_push_bits();
+}
+
+void IRAM_ATTR epd_painter_powerctl_74HCT4094D::sr_set_stv(bool val) {
+  _sr.ep_stv = val;
+  sr_push_bits();
+}
+
+bool epd_painter_powerctl_74HCT4094D::powerOn() {
+  EPD_DEBUG_PRINT("[PWRCTL] Shift-reg power-on...\n");
+  _sr.ep_scan_direction = true;
+  _sr.power_disable = false;
+  sr_push_bits();
+
+  _sr.neg_power_enable = true;
+  _sr.pos_power_enable = true;
+  sr_push_bits();
+
+  _sr.ep_stv = true;
+  _sr.ep_output_enable = true;
+  _sr.ep_mode = true;
+  sr_push_bits();
+  return true;
+}
+
+void epd_painter_powerctl_74HCT4094D::powerOff() {
+  EPD_DEBUG_PRINT("[PWRCTL] Shift-reg power-off...\n");
+  _sr.pos_power_enable = false;
+  _sr.neg_power_enable = false;
+  sr_push_bits();
+
+  _sr.ep_stv = false;
+  _sr.ep_output_enable = false;
+  _sr.ep_mode = false;
+  _sr.ep_latch_enable = false;
+  _sr.power_disable = true;
+  sr_push_bits();
 }
