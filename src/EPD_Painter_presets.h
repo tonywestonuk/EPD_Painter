@@ -106,7 +106,6 @@
         .data_pins = { 11, 12, 13, 14, 21, 47, 45, 38 },
         .i2c = { .sda = 6, .scl = 5, .freq = 100000 },   // I2C bus exposed for peripherals on H752
         .power = { .pca_addr = -1, .tps_addr = -1 },
-        .shift = { .data = 2, .clk = 42, .str = 1 },
         .waveforms = {
             .fast_lighter   = { { 1, 2, 2, 2, 2, 2, 3 },
                                 { 3, 2, 2, 2, 2, 2, 3 },
@@ -127,6 +126,7 @@
                                 { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
+        .shift = { .data = 2, .clk = 42, .strobe = 1 },
     };
     
 #else
