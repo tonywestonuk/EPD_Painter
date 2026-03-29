@@ -26,6 +26,11 @@
   #include "freertos/semphr.h"
 #endif
 
+// Define EPD_ASM_TIMING to enable assembly-function timing output.
+// Prints compact_pixels, epd_painter_ink, and convert_packed_fb_to_ink
+// durations to serial each frame so you can compare old vs new .S builds.
+//#define EPD_ASM_TIMING
+
 // LCD_CAM signal indices for the 8 parallel data lines
 static const uint8_t kDataSignals[8] = {
   LCD_DATA_OUT0_IDX,
@@ -94,21 +99,6 @@ static IRAM_ATTR void compact_pixels_rotated_cw(
 extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
   const uint8_t *waveform, uint32_t chunk_flags);
-
-extern "C" uint32_t epd_painter_ink_on(
-  uint8_t *packed_fastbuffer,
-  const uint8_t *packed_screenbuffer,
-  uint32_t length_bytes);
-
-extern "C" void epd_painter_ink_off(
-  uint8_t *packed_fastbuffer,
-  uint8_t *packed_screenbuffer,
-  uint32_t length_bytes,
-  uint32_t bitmask);
-
-extern "C" void epd_painter_interleaved_copy(
-  const uint8_t *input, uint8_t *output,
-  int16_t width, int16_t height, bool interlace_period);
 
 extern "C" uint32_t epd_painter_ink(uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t bitmask);
 
@@ -475,11 +465,16 @@ void EPD_Painter::powerOff() {
 void EPD_Painter::paint(uint8_t *framebuffer) {
   xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
 
+#ifdef EPD_ASM_TIMING
+  const int64_t _cp_t0 = esp_timer_get_time();
+#endif
   if (_config.rotation == Rotation::ROTATION_CW)
     compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
   else
     epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
-
+#ifdef EPD_ASM_TIMING
+  printf("[paint] compact_pixels: %lld us\n", esp_timer_get_time() - _cp_t0);
+#endif
 
   paintStage=(interlace_mode?3:2);
   xSemaphoreGive(_paint_buffer_sem); 
@@ -526,14 +521,16 @@ void EPD_Painter::unpaintPacked(const uint8_t* packed) {
 // =============================================================================
 void EPD_Painter::paintLater(uint8_t *framebuffer) {
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
-    //const int64_t t0 = esp_timer_get_time();
-
+#ifdef EPD_ASM_TIMING
+    const int64_t _cpl_t0 = esp_timer_get_time();
+#endif
     if (_config.rotation == Rotation::ROTATION_CW)
       compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
     else
       epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
-    
-   // printf("[rotate] compact_pixels_rotated_cw: %lld us\n", esp_timer_get_time() - t0);
+#ifdef EPD_ASM_TIMING
+    printf("[paintLater] compact_pixels: %lld us\n", esp_timer_get_time() - _cpl_t0);
+#endif
 
     
     paintStage=interlace_mode?3:2;
@@ -565,10 +562,12 @@ void EPD_Painter::_paint_task_body() {
 
     PanelPowerGuard guard(*this);
 
+#ifdef EPD_ASM_TIMING
+    const int64_t _ink_t0 = esp_timer_get_time();
+#endif
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
       uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
-
 
       if (interlace_mode){
           bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
@@ -576,6 +575,9 @@ void EPD_Painter::_paint_task_body() {
           bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  0xffffffff);
       }
     }
+#ifdef EPD_ASM_TIMING
+    printf("[paint_task] epd_painter_ink (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
+#endif
 
     const uint8_t *lt_wf;
     const uint8_t *dk_wf;
@@ -595,6 +597,9 @@ void EPD_Painter::_paint_task_body() {
       wf_len = 13;
     }
 
+#ifdef EPD_ASM_TIMING
+    int64_t _conv_total = 0;
+#endif
     for (uint8_t pass = 0; pass < wf_len; pass++) {
       uint8_t lighter_wf[3] = {
         (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
@@ -609,8 +614,14 @@ void EPD_Painter::_paint_task_body() {
 
       for (int row = 0; row < _config.height; row++) {
         uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+#ifdef EPD_ASM_TIMING
+        const int64_t _conv_t0 = esp_timer_get_time();
+#endif
         epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, darker_wf, bitmask[row]);
         epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, lighter_wf, ~bitmask[row]);
+#ifdef EPD_ASM_TIMING
+        _conv_total += esp_timer_get_time() - _conv_t0;
+#endif
         sendRow(row == 0, false, false);
       }
 
@@ -621,6 +632,9 @@ void EPD_Painter::_paint_task_body() {
       }
 
     }
+#ifdef EPD_ASM_TIMING
+    printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
+#endif
 
     vTaskDelay(1);  // yield once per frame: feeds WDT and lets application task run
 
