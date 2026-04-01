@@ -36,12 +36,16 @@ There is no Makefile, CMake, or CLI build system — Arduino IDE is the primary 
 
 ### Board Presets
 
-Enable via `#define` before including the library:
+Optional explicit selection via `#define` before including the library:
 ```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3        // 960×540, pins 6,14,7,12,9,11,8,10
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS  // 960×540, pins 5,6,7,15,16,17,18,8
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752 // 960x540, pins 5,6,7,15,16,17,18,8
 ```
+
+If none is defined, `EPD_PAINTER_PRESET_AUTO` is enabled automatically and `begin()` probes the supported boards at runtime.
+
+`EPD_Painter_presets.h` is imported automatically by `EPD_Painter.h`, `EPD_Painter_Adafruit.h`, and `EPD_Painter_LVGL.h`.
 
 ### Delta Update System
 

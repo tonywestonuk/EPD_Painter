@@ -37,18 +37,19 @@ On top of that:
 2. Install the **Adafruit GFX Library** (required) via Arduino Library Manager
 3. Install **LVGL v9** (optional — needed for LVGL examples) via Arduino Library Manager
 4. Select your board in Arduino IDE: M5Stack M5PaperS3 or LilyGo T5 S3 GPS (ESP32-S3 with PSRAM)
-5. Add one `#define` before your includes to select your board preset (see Quick Start below)
+5. Choose whether to select a board explicitly with a `#define`, or let the library auto-detect it at runtime
 
 ---
 
 ## Quick start
 
 ```cpp
-// Uncomment the define that matches your board.
+// Optional: uncomment the define that matches your board.
+// If none is defined, EPD_Painter falls back to AUTO mode
+// and probes the supported boards at runtime.
 //#define EPD_PAINTER_PRESET_M5PAPER_S3
 //#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
 //#define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
-#include "EPD_Painter_presets.h"
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -67,6 +68,15 @@ void setup() {
 
 void loop() {}
 ```
+
+`EPD_Painter_presets.h` is now imported automatically by `EPD_Painter.h`, `EPD_Painter_Adafruit.h`, and `EPD_Painter_LVGL.h`. You only need the binding header you actually use.
+
+### Board selection modes
+
+- Explicit preset: define `EPD_PAINTER_PRESET_M5PAPER_S3`, `EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS`, or `EPD_PAINTER_PRESET_LILYGO_T5_S3_H752` before including the library
+- AUTO fallback: if no preset `#define` is present, the library enables `EPD_PAINTER_PRESET_AUTO` automatically and probes the known boards during `begin()`
+
+Use an explicit preset when you know the target hardware at compile time and want fixed configuration. Use AUTO when the same sketch may run on multiple supported boards.
 
 ---
 

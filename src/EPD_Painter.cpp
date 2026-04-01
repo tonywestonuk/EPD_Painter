@@ -223,6 +223,10 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
 // =============================================================================
 bool EPD_Painter::begin() {
 
+  #ifdef EPD_PAINTER_PRESET_AUTO
+    if (!autoDetectBoard()) return false;
+  #endif
+
   // -- Start I2C if needed.
 #ifdef ARDUINO
   if (_config.i2c.scl != -1 && _config.i2c.wire == nullptr) {
@@ -1026,4 +1030,51 @@ void EPD_Painter::dither(uint8_t* fb, uint16_t width, uint16_t height) {
     }
 
     heap_caps_free(next_err);
+}
+
+// =============================================================================
+// autoDetectBoard()
+//
+// AUTO preset fallback used by begin().
+//
+// If the user did not select a board explicitly, EPD_PAINTER_PRESET is built
+// with placeholder pins and this function probes the known board I2C buses to
+// find a matching preset at runtime.
+//
+// Returns true when a supported board is detected and _config has been replaced
+// with the matching preset. Returns false when no known board responds, so
+// begin() can fail cleanly instead of continuing with an invalid configuration.
+// =============================================================================
+bool EPD_Painter::autoDetectBoard() {
+  #ifdef ARDUINO
+    if (_config.data_pins[0] >= 0) return true;
+
+    Rotation _rotation = _config.rotation;
+    int i = 1;
+    for (const auto& probe : Probe) {
+      printf("[EPD] Probing board %d on SDA=%d, SCL=%d, addr=0x%x\n", i, probe.i2c_sda, probe.i2c_scl, probe.i2c_addr);
+      TwoWire _w(1);   // use bus 1 just for the probe; will be deleted
+      _w.begin(probe.i2c_sda, probe.i2c_scl, 100000);
+      _w.beginTransmission(probe.i2c_addr);
+      bool found = (_w.endTransmission() == 0);
+      _w.end();
+      // Reset Pins to output
+      EPD_PIN_OUTPUT(probe.i2c_sda);
+      EPD_PIN_OUTPUT(probe.i2c_scl);
+      if(found) {
+        printf("[EPD] Board %d found\n", i);
+        _config = *probe.preset;
+        _config.rotation = _rotation;  // preserve user-specified rotation across auto-detect
+        printf("[EPD] Detected panel details: \n - I2C SDA: %d\n - I2C SCL: %d\n", _config.i2c.sda, _config.i2c.scl);
+        return true;
+      }
+      ++i;
+    }
+
+    printf("[EPD] No known board found; begin() will fail\n");
+    return false;
+  
+  #else
+    return false;
+  #endif
 }

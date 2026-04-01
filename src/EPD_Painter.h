@@ -1,6 +1,17 @@
 #ifndef EPD_Painter_H
 #define EPD_Painter_H
 
+#include <stddef.h>
+
+#if !defined(EPD_PAINTER_PRESET_M5PAPER_S3) && \
+    !defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS) && \
+    !defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
+  
+  #ifndef EPD_PAINTER_PRESET_AUTO
+    #define EPD_PAINTER_PRESET_AUTO
+  #endif
+#endif
+
 // Forward declaration — avoids circular include with epd_painter_shutdown.h
 class EPD_PainterShutdown;
 
@@ -63,7 +74,7 @@ struct PowerCtlConfig {
     int8_t data   = -1;
     int8_t clk    = -1; 
     int8_t strobe = -1;
-    int8_t le_time = 6;
+    int8_t le_time = 0;
   };
 
 
@@ -91,6 +102,13 @@ struct PowerCtlConfig {
       Config withRotation(Rotation r) const { Config c = *this; c.rotation = r; return c; }
   };
 
+  struct ProbeSettings {
+    Config *preset;
+    int i2c_sda;
+    int i2c_scl;
+    int i2c_addr;
+    bool found = false;
+  };
 
   Config _config;
 
@@ -180,6 +198,7 @@ private:
   // ---- Internal helpers ----
   void powerOn();
   void powerOff();
+  bool autoDetectBoard();
   void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
 
   void shiftOn(int bitmask);
@@ -236,5 +255,7 @@ private:
     }
   };
 };
+
+#include "EPD_Painter_presets.h"
 
 #endif

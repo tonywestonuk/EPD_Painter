@@ -6,9 +6,11 @@ A high-performance e-paper display driver for ESP32-S3 boards (M5PaperS3, LilyGo
 
 ## Quick Setup
 
-### 1. Choose a board preset
+### 1. Choose how the board is selected
 
-Add one of these `#define`s before your includes:
+You can select a board explicitly with a `#define`, or let the library fall back to AUTO mode when no preset is defined.
+
+Optional explicit presets:
 
 ```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3
@@ -17,6 +19,9 @@ Add one of these `#define`s before your includes:
 // or
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 ```
+
+If none of those is defined, `EPD_PAINTER_PRESET_AUTO` is enabled automatically and `begin()` probes the supported boards at runtime.
+
 
 ### 2. Choose a binding
 
@@ -42,6 +47,8 @@ if (!display.begin()) {
     while (1);
 }
 ```
+
+When AUTO mode is active, `begin()` also performs board detection. It returns `false` if no supported board is detected.
 
 If you need access to the I2C bus (e.g. to talk to other devices on the same bus), retrieve the `Wire` instance via `getConfig()`:
 
@@ -195,7 +202,6 @@ Pixel values are 8bpp, but only the two most significant bits are used, giving f
 
 ```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3
-#include "EPD_Painter_presets.h"
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -228,7 +234,6 @@ void loop() {}
 
 ```cpp
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#include "EPD_Painter_presets.h"
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -318,7 +323,6 @@ EPD_PainterLVGL::BLACK     // 3 — black
 
 ```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3
-#include "EPD_Painter_presets.h"
 #include "EPD_Painter_LVGL.h"
 
 EPD_PainterLVGL display(EPD_PAINTER_PRESET);
@@ -492,7 +496,6 @@ With the default settings, `begin()` handles everything transparently:
 
 ```cpp
 #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#include "EPD_Painter_presets.h"
 #include "EPD_Painter_Adafruit.h"
 #include "LittleFS.h"
 

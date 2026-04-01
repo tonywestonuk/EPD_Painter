@@ -3,8 +3,8 @@
 
 #include "EPD_Painter.h"
 
-#if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = {
+#if defined(EPD_PAINTER_PRESET_M5PAPER_S3) || defined(EPD_PAINTER_PRESET_AUTO)
+    static EPD_Painter::Config EPD_M5PAPER_S3_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr    = 46,
@@ -43,9 +43,9 @@
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
     };
-
-#elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = {
+#endif
+#if defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS) || defined(EPD_PAINTER_PRESET_AUTO)
+    static EPD_Painter::Config EPD_LILYGO_T5_S3_GPS_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = -1,  // managed via TPS65185 over I2C (powerctl)
@@ -87,14 +87,15 @@
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
     };
+#endif
 // -----------------------------------------------------------------------
 // LilyGo T5 S3 H752 (older variant with 74HCT4094D shift register)
 //   74HCT4094D outputs used by the panel driver:
 //     QP0 -> EP_LE, QP4 -> EP_STV, QP5 -> PWR_EN, QP6 -> EP_MODE, QP7 -> EP_OE
 //   CKV/CKH/STH and the 8-bit data bus remain direct GPIOs.
 // -----------------------------------------------------------------------
-#elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = {
+#if defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752) || defined(EPD_PAINTER_PRESET_AUTO)
+    static EPD_Painter::Config EPD_LILYGO_T5_S3_H752_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = -1,   // shift register
@@ -128,12 +129,42 @@
                                 { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
-        .shift = { .data = 2, .clk = 42, .strobe = 1 },
+        .shift = { .data = 2, .clk = 42, .strobe = 1, .le_time = 6 },
     };
     
-#else
-#error "No EPD_Painter device selected."
 #endif
 
+#if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_M5PAPER_S3_PRESET;
+#elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_GPS_PRESET;
+#elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_H752_PRESET;
+#elif defined(EPD_PAINTER_PRESET_AUTO)
+// Auto-select preset based on target board (via preprocessor macros defined by the build system)
+    static EPD_Painter::Config EPD_PAINTER_PRESET = {
+    .width    = 960,
+    .height   = 540,
+    .pin_pwr  = -1,
+    .pin_sph  = -1,
+    .pin_oe   = -1,
+    .pin_cl   = -1,
+    .pin_spv  = -1,
+    .pin_ckv  = -1,
+    .pin_le   = -1, 
+    .quality  = EPD_Painter::Quality::QUALITY_NORMAL,
+    .data_pins = { -1, -1, -1, -1, -1, -1, -1, -1 },
+    .waveforms = { },
+};
+
+static EPD_Painter::ProbeSettings Probe[] = {
+    { &EPD_LILYGO_T5_S3_GPS_PRESET, 39, 40, 0x20, false }, // probe for PCA9555
+    { &EPD_LILYGO_T5_S3_H752_PRESET, 6,  5, 0x51, false }, // probe for BM8563;
+    { &EPD_M5PAPER_S3_PRESET,       41, 42, 0x51, false }, // probe for BM8563
+    // Add new board probes here, ensuring they have unique I2C addresses and pins
+};
+#else
+    #error "No EPD_PAINTER_PRESET defined; please define one of the presets or set EPD_PAINTER_PRESET_AUTO"
+#endif
 
 #endif

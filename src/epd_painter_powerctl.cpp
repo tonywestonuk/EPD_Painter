@@ -325,7 +325,7 @@ void epd_painter_powerctl_74HCT4094D::sr_push_bits() {
 void IRAM_ATTR epd_painter_powerctl_74HCT4094D::sr_set_le(bool val) {
   _sr.ep_latch_enable = val;
   sr_push_bits();
-  if(val) EPD_DELAY_US(config->shift.le_time);
+  if(val && config->shift.le_time > 0) EPD_DELAY_US(config->shift.le_time);
 }
 
 void IRAM_ATTR epd_painter_powerctl_74HCT4094D::sr_set_stv(bool val) {
