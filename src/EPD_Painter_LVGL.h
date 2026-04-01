@@ -98,7 +98,9 @@ public:
     // end()
     // -------------------------------------------------------------------------
     bool end() { return _painter.end(); }
-    void clear()   { _painter.clear(); }
+    void clear(const EPD_Painter::Rect* rects = nullptr, int num_rects = 0, EPD_Painter::ClearMode mode = EPD_Painter::ClearMode::HARD) { _painter.clear(rects, num_rects, mode); }
+    int  computeDirtyRects(EPD_Painter::Rect* out, int max, int tolerance = 0) const { return _painter.computeDirtyRects(out, max, tolerance); }
+    void clearDirtyAreas(int tolerance = 0, EPD_Painter::ClearMode mode = EPD_Painter::ClearMode::SOFT) { _painter.clearDirtyAreas(_framebuffer, tolerance, mode); }
     void fxClear() { _painter.fxClear(); }
 
     // -------------------------------------------------------------------------

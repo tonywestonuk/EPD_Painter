@@ -27,9 +27,9 @@
 //   gfx.print("Hello!");
 //   gfx.paint();
 // =============================================================================
-class EPD_PainterAdafruit : public GFXcanvas8 {
+class EPD_PainterAdafruit : public GFXcanvas8
+{
 public:
-
     // -------------------------------------------------------------------------
     // Constructor — allocates the framebuffer and wires everything together.
     // -------------------------------------------------------------------------
@@ -38,20 +38,22 @@ public:
               // Swap canvas dimensions for portrait (CW rotation) so the GFX
               // drawing space matches the logical orientation.
               (config.rotation == EPD_Painter::Rotation::ROTATION_CW || portrait) ? config.height : config.width,
-              (config.rotation == EPD_Painter::Rotation::ROTATION_CW || portrait) ? config.width  : config.height,
+              (config.rotation == EPD_Painter::Rotation::ROTATION_CW || portrait) ? config.width : config.height,
               false),
           _config(config),
           _painter(config, portrait)
     {
-        if (portrait) _config.rotation = EPD_Painter::Rotation::ROTATION_CW;
+        if (portrait)
+            _config.rotation = EPD_Painter::Rotation::ROTATION_CW;
     }
 
     // -------------------------------------------------------------------------
     // Destructor — frees the framebuffer.
     // GFXcanvas8 must not free it too, so we null the pointer before it runs.
     // -------------------------------------------------------------------------
-    ~EPD_PainterAdafruit() {
-        this->buffer = nullptr;         // disown before ~GFXcanvas8 runs
+    ~EPD_PainterAdafruit()
+    {
+        this->buffer = nullptr; // disown before ~GFXcanvas8 runs
         heap_caps_free(_framebuffer);
         _framebuffer = nullptr;
     }
@@ -60,13 +62,14 @@ public:
     // begin() — allocates framebuffer, inits EPD_Painter hardware.
     // Call after Serial / I2C setup, before any drawing.
     // -------------------------------------------------------------------------
-    bool begin() {
+    bool begin()
+    {
         const size_t buf_size = (size_t)_config.width * (size_t)_config.height;
 
         buffer = static_cast<uint8_t *>(
             heap_caps_aligned_alloc(16, buf_size, MALLOC_CAP_SPIRAM));
-        
-        memset(buffer,0x00,_config.width * _config.height);
+
+        memset(buffer, 0x00, _config.width * _config.height);
 
         _painter.setInterlaceMode(true);
 
@@ -81,31 +84,32 @@ public:
     // -------------------------------------------------------------------------
     // Rendering
     // -------------------------------------------------------------------------
-    void paint()   { _painter.paint(buffer); }
-    void clear()   { _painter.clear(); }
+    void paint() { _painter.paint(buffer); }
+    void clear(const EPD_Painter::Rect *rects = nullptr, int num_rects = 0, EPD_Painter::ClearMode mode = EPD_Painter::ClearMode::HARD) { _painter.clear(rects, num_rects, mode); }
+    int computeDirtyRects(EPD_Painter::Rect *out, int max, int tolerance = 0) const { return _painter.computeDirtyRects(out, max, tolerance); }
+    void clearDirtyAreas(int tolerance = 0, EPD_Painter::ClearMode mode = EPD_Painter::ClearMode::SOFT) { _painter.clearDirtyAreas(buffer, tolerance, mode); }
     void fxClear() { _painter.fxClear(); }
-    void dither()  { EPD_Painter::dither(buffer, _config.width, _config.height); }
+    void dither() { EPD_Painter::dither(buffer, _config.width, _config.height); }
 
     // -------------------------------------------------------------------------
     // Quality
     // -------------------------------------------------------------------------
     void setQuality(EPD_Painter::Quality q) { _painter.setQuality(q); }
-    
-    EPD_Painter::Config getConfig(){ return _painter.getConfig(); }
-    
+
+    EPD_Painter::Config getConfig() { return _painter.getConfig(); }
 
     // -------------------------------------------------------------------------
     // Access to the underlying driver if needed
     // -------------------------------------------------------------------------
-    EPD_Painter      &driver()   { return _painter; }
+    EPD_Painter &driver() { return _painter; }
 
     // Shutdown — call setAutoShutdown(false) BEFORE begin() to intercept
     // the shutdown yourself. Then check shutdown()->isPending() in loop().
-    void              setAutoShutdown(bool v) { _painter.setAutoShutdown(v); }
-    EPD_PainterShutdown *shutdown()           { return _painter.shutdown(); }
+    void setAutoShutdown(bool v) { _painter.setAutoShutdown(v); }
+    EPD_PainterShutdown *shutdown() { return _painter.shutdown(); }
 
 private:
-    EPD_Painter::Config  _config;
-    uint8_t             *_framebuffer = nullptr;    // owned here
-    EPD_Painter          _painter;                  // borrows _framebuffer
+    EPD_Painter::Config _config;
+    uint8_t *_framebuffer = nullptr; // owned here
+    EPD_Painter _painter;            // borrows _framebuffer
 };

@@ -97,7 +97,27 @@ struct PowerCtlConfig {
   bool begin();
   bool end();
 
-  void clear();
+  struct Rect {
+    int16_t x, y, w, h;
+  };
+
+  enum class ClearMode {
+    HARD,  // 4 phases {6,2,4,8} passes — full ghosting removal
+    SOFT   // 2 phases {2,2} passes — faster, light refresh
+  };
+
+  void clear(const Rect* rects = nullptr, int num_rects = 0, ClearMode mode = ClearMode::HARD);
+
+  // Compare screenbuffer (current display state) against paintbuffer (desired state)
+  // and return dirty rectangles. tolerance = max clean pixels a rect may absorb
+  // when bridging gaps between dirty rows (0 = merge only adjacent dirty rows,
+  // larger values merge more, screen_width * screen_height = single rect).
+  int computeDirtyRects(Rect* out_rects, int max_rects, int tolerance = 0) const;
+
+  // Convenience: compact framebuffer → paintbuffer, compute dirty rects, then
+  // clear only those areas. tolerance is passed to computeDirtyRects.
+  void clearDirtyAreas(uint8_t* framebuffer, int tolerance = 0, ClearMode mode = ClearMode::SOFT);
+
   void fxClear();
   void clearBuffers();  // zero all packed buffers (call before power-off to reset DC-balance baseline)
   void paint(uint8_t* framebuffer);

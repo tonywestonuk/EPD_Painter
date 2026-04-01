@@ -705,57 +705,185 @@ void EPD_Painter::clearBuffers() {
 }
 
 // =============================================================================
-// clear()
+// computeDirtyRects()
+// Scans packed_screenbuffer vs packed_paintbuffer row by row.  Each row is
+// checked byte-by-byte (1 byte = 4 pixels at 2bpp) to find the leftmost and
+// rightmost changed byte.
+//
+// Rows are grouped into rectangles.  When a clean row is encountered inside an
+// open rectangle the "wasted" pixel count grows by (rect_width × 4).  Once
+// wasted exceeds tolerance the rectangle is closed at the last dirty row and a
+// new one will be opened at the next dirty row.
+//
+// tolerance = 0  → only consecutive dirty rows are merged (tight rects)
+// tolerance = large → everything collapses toward a single full-screen rect
 // =============================================================================
-void EPD_Painter::clear() {
+int EPD_Painter::computeDirtyRects(Rect* out_rects, int max_rects, int tolerance) const {
+    if (!packed_screenbuffer || !packed_paintbuffer || max_rects <= 0) return 0;
 
+    const int prb = _config.width / 4;
+    const int H   = _config.height;
+
+    int  count   = 0;
+    bool open    = false;
+    int  rect_y0 = 0, rect_y1 = 0;
+    int  rect_bx0 = 0, rect_bx1 = 0;
+    int  wasted  = 0;
+
+    for (int row = 0; row < H && count < max_rects; row++) {
+        const uint8_t* s = packed_screenbuffer + row * prb;
+        const uint8_t* p = packed_paintbuffer  + row * prb;
+
+        // Find changed byte span for this row
+        int bx0 = prb, bx1 = 0;
+        for (int bx = 0; bx < prb; bx++) {
+            if (s[bx] != p[bx]) {
+                if (bx < bx0) bx0 = bx;
+                bx1 = bx + 1;
+            }
+        }
+        const bool dirty = (bx0 < bx1);
+
+        if (dirty) {
+            if (!open) {
+                open     = true;
+                rect_y0  = row;
+                rect_y1  = row + 1;
+                rect_bx0 = bx0;
+                rect_bx1 = bx1;
+                wasted   = 0;
+            } else {
+                if (bx0 < rect_bx0) rect_bx0 = bx0;
+                if (bx1 > rect_bx1) rect_bx1 = bx1;
+                rect_y1 = row + 1;
+                wasted  = 0;
+            }
+        } else if (open) {
+            wasted += (rect_bx1 - rect_bx0) * 4;
+            if (wasted > tolerance) {
+                out_rects[count++] = {
+                    (int16_t)(rect_bx0 * 4),
+                    (int16_t) rect_y0,
+                    (int16_t)((rect_bx1 - rect_bx0) * 4),
+                    (int16_t)(rect_y1 - rect_y0)
+                };
+                open = false;
+            }
+        }
+    }
+
+    if (open && count < max_rects) {
+        out_rects[count++] = {
+            (int16_t)(rect_bx0 * 4),
+            (int16_t) rect_y0,
+            (int16_t)((rect_bx1 - rect_bx0) * 4),
+            (int16_t)(rect_y1 - rect_y0)
+        };
+    }
+
+    return count;
+}
+
+// =============================================================================
+// clearDirtyAreas()
+// =============================================================================
+void EPD_Painter::clearDirtyAreas(uint8_t* framebuffer, int tolerance, ClearMode mode) {
+    // Compact 8bpp framebuffer into packed_paintbuffer (same as paint()).
+    xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+    if (_config.rotation == Rotation::ROTATION_CW)
+        compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
+    else
+        epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
+    xSemaphoreGive(_paint_buffer_sem);
+
+    Rect rects[32];
+    int n = computeDirtyRects(rects, 32, tolerance);
+    if (n > 0)
+        clear(rects, n, mode);
+}
+
+// =============================================================================
+// clear()
+// Optional rects array restricts clearing to those regions only.
+// =============================================================================
+void EPD_Painter::clear(const Rect* rects, int num_rects, ClearMode mode) {
+
+  const bool partial = (rects != nullptr && num_rects > 0);
 
   PanelPowerGuard guard(*this);
 
-  const int packed_row_bytes = _config.width / 4;
+  const int prb = _config.width / 4;  // packed row bytes
 
-  // First paint it white.
-  xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY); 
-  memset(packed_paintbuffer, 0x00, packed_row_bytes * _config.height);
-  paintStage=1;  /// only needs 1 pass.
-  xSemaphoreGive(_paint_buffer_sem); 
-
-  while (paintStage==1){
-    vTaskDelay(1);  // Wait until paintloop starts up again
+  // Paint white into the affected area of the paint buffer.
+  xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+  if (!partial) {
+    memset(packed_paintbuffer, 0x00, prb * _config.height);
+  } else {
+    for (int r = 0; r < num_rects; r++) {
+      int bx0 = rects[r].x / 4;
+      int bx1 = (rects[r].x + rects[r].w + 3) / 4;
+      if (bx1 > prb) bx1 = prb;
+      int y0  = rects[r].y;
+      int y1  = rects[r].y + rects[r].h;
+      if (y1 > _config.height) y1 = _config.height;
+      for (int row = y0; row < y1; row++)
+        memset(packed_paintbuffer + row * prb + bx0, 0x00, bx1 - bx0);
+    }
   }
-  
+  paintStage = 1;
+  xSemaphoreGive(_paint_buffer_sem);
+
+  while (paintStage == 1) {
+    vTaskDelay(1);
+  }
+
   xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
 
-  const uint8_t *lt_wf;
-  int wf_len;
+  dma_buffer = dma_buffer1;
 
-  // Send clear
-  for (int phase = 0; phase < 4; phase++) {
+  // Hardware clear phases.
+  int num_phases;
+  int totpass[4];
+  if (mode == ClearMode::SOFT) {
+    num_phases = 2;
+    totpass[0] = 1; totpass[1] = 1;
+  } else {
+    num_phases = 4;
+    totpass[0] = 6; totpass[1] = 2; totpass[2] = 4; totpass[3] = 8;
+  }
+  for (int phase = 0; phase < num_phases; phase++) {
+
     uint8_t pattern = (phase % 2 == 0) ? 0b01010101 : 0b10101010;
-    memset(dma_buffer1, pattern, packed_row_bytes);
-    memset(dma_buffer2, pattern, packed_row_bytes);
-
-    int totpass[] = { 6, 2, 4, 8}; //6 blacks, 2 whites, 4 blacks 8 whites.
 
     for (int passes = 0; passes < totpass[phase]; passes++) {
       for (int row = 0; row < _config.height; ++row) {
+        if (!partial) {
+          memset(dma_buffer, pattern, prb);
+        } else {
+          memset(dma_buffer, 0x00, prb);
+          for (int r = 0; r < num_rects; r++) {
+            if (row >= rects[r].y && row < rects[r].y + rects[r].h) {
+              int bx0 = rects[r].x / 4;
+              int bx1 = (rects[r].x + rects[r].w + 3) / 4;
+              if (bx1 > prb) bx1 = prb;
+              memset(dma_buffer + bx0, pattern, bx1 - bx0);
+            }
+          }
+        }
         sendRow(row == 0);
       }
       EPD_DELAY_MS(5);
     }
   }
 
-  // Send neutral..
-  memset(dma_buffer1, 0x00, packed_row_bytes);
-  memset(dma_buffer2, 0x00, packed_row_bytes);
+  // Send neutral to close out all rows.
+  memset(dma_buffer1, 0x00, prb);
+  memset(dma_buffer2, 0x00, prb);
   for (int row = 0; row < _config.height; ++row) {
     sendRow(row == 0, row == _config.height - 1);
   }
 
-  
-  xSemaphoreGive(_paint_active_sem); 
-
-
+  xSemaphoreGive(_paint_active_sem);
 }
 // =============================================================================
 // fxClear() — sweeping bar clear effect
