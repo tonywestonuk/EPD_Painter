@@ -39,14 +39,8 @@ public:
               // drawing space matches the logical orientation.
               (config.rotation == EPD_Painter::Rotation::ROTATION_CW || portrait) ? config.height : config.width,
               (config.rotation == EPD_Painter::Rotation::ROTATION_CW || portrait) ? config.width : config.height,
-              false),
-          _config(config),
-          _painter(config, portrait)
-    {
-        if (portrait)
-            _config.rotation = EPD_Painter::Rotation::ROTATION_CW;
-    }
-
+              false), _painter(config, portrait) {}
+   
     // -------------------------------------------------------------------------
     // Destructor — frees the framebuffer.
     // GFXcanvas8 must not free it too, so we null the pointer before it runs.
@@ -64,12 +58,12 @@ public:
     // -------------------------------------------------------------------------
     bool begin()
     {
-        const size_t buf_size = (size_t)_config.width * (size_t)_config.height;
+        const size_t buf_size = (size_t)_painter._config.width * (size_t)_painter._config.height;
 
         buffer = static_cast<uint8_t *>(
             heap_caps_aligned_alloc(16, buf_size, MALLOC_CAP_SPIRAM));
 
-        memset(buffer, 0x00, _config.width * _config.height);
+        memset(buffer, 0x00, _painter._config.width * _painter._config.height);
 
         _painter.setInterlaceMode(true);
 
@@ -91,14 +85,15 @@ public:
     int computeDirtyRects(EPD_Painter::Rect *out, int max, int tolerance = 0) const { return _painter.computeDirtyRects(out, max, tolerance); }
     void clearDirtyAreas(int tolerance = 0, EPD_Painter::ClearMode mode = EPD_Painter::ClearMode::SOFT) { _painter.clearDirtyAreas(buffer, tolerance, mode); }
     void fxClear() { _painter.fxClear(); }
-    void dither() { EPD_Painter::dither(buffer, _config.width, _config.height); }
+    void dither() { EPD_Painter::dither(buffer, _painter._config.width, _painter._config.height); }
 
     // -------------------------------------------------------------------------
     // Quality
     // -------------------------------------------------------------------------
     void setQuality(EPD_Painter::Quality q) { _painter.setQuality(q); }
 
-    EPD_Painter::Config getConfig() { return _painter.getConfig(); }
+    const EPD_Painter::Config& getConfig() { return _painter.getConfig(); }
+    const EPD_Painter::Config* getPreset() const { return _painter.getPreset(); }
 
     // -------------------------------------------------------------------------
     // Access to the underlying driver if needed
@@ -140,7 +135,6 @@ public:
     EPD_PainterShutdown *shutdown() { return _painter.shutdown(); }
 
 private:
-    EPD_Painter::Config _config;
     uint8_t *_framebuffer = nullptr; // owned here
     EPD_Painter _painter;            // borrows _framebuffer
 };

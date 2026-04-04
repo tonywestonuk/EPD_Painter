@@ -4,7 +4,7 @@
 #include "EPD_Painter.h"
 
 #if defined(EPD_PAINTER_PRESET_M5PAPER_S3) || defined(EPD_PAINTER_PRESET_AUTO)
-    static EPD_Painter::Config EPD_M5PAPER_S3_PRESET = {
+    inline EPD_Painter::Config EPD_M5PAPER_S3_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr    = 46,
@@ -30,10 +30,10 @@
                                 { 3, 1, 1, 1, 1, 1, 3 },
                                 { 1, 1, 1, 1, 1, 1, 1 } },
             .normal_lighter = { { 1, 3, 1, 1, 2, 2, 1, 2, 2, 2, 2, 2, 2 },
-                                { 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3 },
+                                { 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2},
                                 { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
             .normal_darker  = { { 1, 1, 1, 3, 1, 1, 1, 1, 2, 1, 2, 2, 2 },
-                                { 1, 2, 2, 1, 1, 2, 3, 3, 1, 1, 1, 1, 1 },
+                                { 1, 3, 1, 3, 1, 2, 2, 3, 1, 1, 1, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
             .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
                                 { 1, 3, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },
@@ -45,7 +45,7 @@
     };
 #endif
 #if defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS) || defined(EPD_PAINTER_PRESET_AUTO)
-    static EPD_Painter::Config EPD_LILYGO_T5_S3_GPS_PRESET = {
+    inline EPD_Painter::Config EPD_LILYGO_T5_S3_GPS_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = -1,  // managed via TPS65185 over I2C (powerctl)
@@ -95,7 +95,7 @@
 //   CKV/CKH/STH and the 8-bit data bus remain direct GPIOs.
 // -----------------------------------------------------------------------
 #if defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752) || defined(EPD_PAINTER_PRESET_AUTO)
-    static EPD_Painter::Config EPD_LILYGO_T5_S3_H752_PRESET = {
+    inline EPD_Painter::Config EPD_LILYGO_T5_S3_H752_PRESET = {
         .width    = 960,
         .height   = 540,
         .pin_pwr  = -1,   // shift register
@@ -131,18 +131,18 @@
         },
         .shift = { .data = 2, .clk = 42, .strobe = 1, .le_time = 6 },
     };
-    
+
 #endif
 
 #if defined(EPD_PAINTER_PRESET_M5PAPER_S3)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_M5PAPER_S3_PRESET;
+    inline EPD_Painter::Config& EPD_PAINTER_PRESET = EPD_M5PAPER_S3_PRESET;
 #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_GPS_PRESET;
+    inline EPD_Painter::Config& EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_GPS_PRESET;
 #elif defined(EPD_PAINTER_PRESET_LILYGO_T5_S3_H752)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_H752_PRESET;
+    inline EPD_Painter::Config& EPD_PAINTER_PRESET = EPD_LILYGO_T5_S3_H752_PRESET;
 #elif defined(EPD_PAINTER_PRESET_AUTO)
 // Auto-select preset based on target board (via preprocessor macros defined by the build system)
-    static EPD_Painter::Config EPD_PAINTER_PRESET = {
+    inline EPD_Painter::Config EPD_PAINTER_PRESET = {
     .width    = 960,
     .height   = 540,
     .pin_pwr  = -1,
@@ -151,13 +151,13 @@
     .pin_cl   = -1,
     .pin_spv  = -1,
     .pin_ckv  = -1,
-    .pin_le   = -1, 
+    .pin_le   = -1,
     .quality  = EPD_Painter::Quality::QUALITY_NORMAL,
     .data_pins = { -1, -1, -1, -1, -1, -1, -1, -1 },
     .waveforms = { },
 };
 
-static EPD_Painter::ProbeSettings Probe[] = {
+inline EPD_Painter::ProbeSettings Probe[] = {
     { &EPD_LILYGO_T5_S3_GPS_PRESET, 39, 40, 0x20, false }, // probe for PCA9555
     { &EPD_LILYGO_T5_S3_H752_PRESET, 6,  5, 0x51, false }, // probe for BM8563;
     { &EPD_M5PAPER_S3_PRESET,       41, 42, 0x51, false }, // probe for BM8563

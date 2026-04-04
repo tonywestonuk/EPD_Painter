@@ -127,6 +127,7 @@ static inline void gpio_clear_fast(uint8_t pin) {
 
 EPD_Painter::EPD_Painter(const Config &config, bool portrait) {
   _config = config;
+  _preset = &config;
   if (portrait) _config.rotation = Rotation::ROTATION_CW;
 }
 
@@ -1064,6 +1065,7 @@ bool EPD_Painter::autoDetectBoard() {
       if(found) {
         printf("[EPD] Board %d found\n", i);
         _config = *probe.preset;
+        _preset = probe.preset;
         _config.rotation = _rotation;  // preserve user-specified rotation across auto-detect
         printf("[EPD] Detected panel details: \n - I2C SDA: %d\n - I2C SCL: %d\n", _config.i2c.sda, _config.i2c.scl);
         return true;

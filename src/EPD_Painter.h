@@ -111,6 +111,7 @@ struct PowerCtlConfig {
   };
 
   Config _config;
+  const Config* _preset = nullptr;
 
   EPD_Painter(const Config &config, bool portrait = false);
   bool begin();
@@ -155,8 +156,11 @@ struct PowerCtlConfig {
   // (~2 KB for a 960-wide panel) internally.
   static void dither(uint8_t* fb, uint16_t width, uint16_t height);
 
-  Config getConfig(){
+  const Config& getConfig(){
     return _config;
+  }
+  const Config* getPreset() const {
+    return _preset;
   }
 
   void setAutoShutdown(bool v) { _autoShutdown = v; }

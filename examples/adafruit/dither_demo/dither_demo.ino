@@ -515,12 +515,12 @@ void loop() {
     // Handle serial commands from calibration tool
     handleSerial();
 
-#ifdef EPD_PAINTER_PRESET_M5PAPER_S3
+if (epd.getPreset() == &EPD_M5PAPER_S3_PRESET) {
     // M5PaperS3 has no user-accessible BOOT button — advance automatically
     delay(4000);
     currentPage = (currentPage % NUM_PAGES) + 1;
     showPage(currentPage);
-#else
+} else {
     // Wait for BOOT button press (active LOW), with debounce
     if (digitalRead(BOOT_BTN) == LOW) {
         delay(50);
@@ -533,5 +533,5 @@ void loop() {
         }
     }
     delay(10); // avoid watchdog trigger
-#endif
+}
 }

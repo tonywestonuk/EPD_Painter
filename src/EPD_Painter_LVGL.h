@@ -111,7 +111,7 @@ public:
     // -------------------------------------------------------------------------
     // Config accessor — mirrors EPD_PainterAdafruit
     // -------------------------------------------------------------------------
-    EPD_Painter::Config getConfig() { return _painter.getConfig(); }
+    const EPD_Painter::Config& getConfig() { return _painter.getConfig(); }
 
     // -------------------------------------------------------------------------
     // Access to the underlying driver if needed
