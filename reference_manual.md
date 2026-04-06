@@ -32,6 +32,28 @@ If none of those is defined, `EPD_PAINTER_PRESET_AUTO` is enabled automatically 
 
 ---
 
+## Board Detection
+
+When using AUTO mode (the default), `begin()` probes the hardware at runtime and selects the matching preset. After `begin()` returns, you can check which board was detected using `getPreset()`:
+
+```cpp
+#include "EPD_Painter_presets.h"   // required to access the preset names
+
+if (display.getPreset() == &EPD_M5PAPER_S3_PRESET) {
+    // running on M5PaperS3
+} else if (display.getPreset() == &EPD_LILYGO_T5_S3_GPS_PRESET) {
+    // running on LilyGo T5 S3 GPS
+} else if (display.getPreset() == &EPD_LILYGO_T5_S3_H752_PRESET) {
+    // running on LilyGo T5 S3 H752
+}
+```
+
+This is useful for adapting your UI to hardware differences — for example, the M5PaperS3 uses the reset button for shutdown while LilyGo boards have a dedicated power button, and the M5PaperS3 has no accessible BOOT button for input.
+
+`EPD_Painter_presets.h` is already included automatically by `EPD_Painter_Adafruit.h` and `EPD_Painter_LVGL.h`, so you only need the explicit include if you are using the raw `EPD_Painter.h` binding.
+
+---
+
 ## Core API
 
 ### `begin()`
@@ -322,16 +344,13 @@ When powered via USB, shutdown is bypassed entirely — pressing reset always do
 
 ---
 
-### Hello World — M5PaperS3
+### Hello World
 
 ```cpp
 // hello_world.ino
-// Displays "Hello, EPD!" on the M5PaperS3.
-// Change the #define to match your board.
+// Displays "Hello, EPD!" on the screen.
+// The board is detected automatically — no #define needed.
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
-// #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-// #define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -369,7 +388,6 @@ void loop() {
 // Counts upward and updates the display every 500ms.
 // Only changed pixels are redrawn each frame.
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -410,7 +428,6 @@ After many updates, faint ghost images can accumulate. Clear the panel every N f
 // ghosting_removal.ino
 // Clears the panel every 20 frames to remove accumulated ghosting.
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -454,7 +471,6 @@ void loop() {
 // Animates text scrolling across the screen using FAST quality (lighter blacks
 // but higher speed), then renders a sharp final frame at HIGH quality.
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -503,7 +519,6 @@ void loop() {
 // Draws in portrait orientation (540 wide x 960 tall canvas).
 // The driver rotates the output to fit the physical 960x540 landscape panel.
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_Adafruit.h"
 
 // withRotation() returns a modified copy of the preset — no other changes needed
@@ -542,7 +557,6 @@ void loop() {
 // lvgl_hello.ino
 // Minimal LVGL setup. Requires: LVGL v9, LV_COLOR_DEPTH 8 in lv_conf.h
 
-#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_LVGL.h"
 
 EPD_PainterLVGL display(EPD_PAINTER_PRESET);
@@ -590,29 +604,37 @@ With default settings, pressing reset while running on battery triggers a shutdo
 
 ```cpp
 // shutdown_auto.ino
-// Press reset while on battery to power off gracefully.
+// Press the power/reset button while on battery to power off gracefully.
 // On the next boot, the display is cleaned up automatically before the app starts.
+// The board is detected automatically — no #define needed.
 
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
 #include "EPD_Painter_Adafruit.h"
+#include "EPD_Painter_presets.h"    // gives access to preset names for board detection
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
 
 void setup() {
     Serial.begin(115200);
 
-    // begin() handles everything: DC-balance on startup, shutdown on reset
+    // begin() handles everything: DC-balance on startup, shutdown on reset/power button
     if (!display.begin()) {
         Serial.println("Display init failed");
         while (1);
     }
 
+    // Show the appropriate shutdown instruction for this board
     display.clear();
     display.fillScreen(0);
     display.setTextColor(3);
     display.setTextSize(3);
     display.setCursor(40, 260);
-    display.print("Press reset to power off.");
+
+    if (display.getPreset() == &EPD_M5PAPER_S3_PRESET) {
+        display.print("Press reset to power off.");
+    } else {
+        display.print("Press power button to power off.");
+    }
+
     display.paint();
 }
 
@@ -621,7 +643,7 @@ void loop() {
 }
 ```
 
-The device arms itself on every normal boot. Pressing reset once triggers shutdown — a built-in fractal image is painted to the screen, pixel state is saved, and the device powers off. On the next boot the fractal is undrawn (DC balance) and the app starts normally.
+The device arms itself on every normal boot. Pressing reset (M5PaperS3) or the power button (LilyGo) triggers shutdown — a built-in fractal image is painted to the screen, pixel state is saved, and the device powers off. On the next boot the fractal is undrawn (DC balance) and the app starts normally.
 
 ---
 
@@ -634,10 +656,13 @@ The boilerplate below is the connection between your drawing code and the shutdo
 ```cpp
 // shutdown_custom_image.ino
 // Shows a custom "Powered off" screen when the device shuts down.
-// Only edit the drawShutdownScreen() function — leave everything else as-is.
+// The board is detected automatically — the shutdown screen adapts accordingly.
+//
+// Only edit drawShutdownScreen() to design your screen.
+// Leave everything else exactly as-is.
 
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
 #include "EPD_Painter_Adafruit.h"
+#include "EPD_Painter_presets.h"    // gives access to preset names for board detection
 #include "epd_painter_bootctl.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -645,16 +670,23 @@ EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
 // -----------------------------------------------------------------------
 // Edit this function to design your shutdown screen.
 // Use any normal Adafruit GFX drawing calls.
+// display.getPreset() lets you customise the message per board.
 // -----------------------------------------------------------------------
 void drawShutdownScreen() {
-    display.fillScreen(0);              // white background
-    display.setTextColor(3);            // black text
+    display.fillScreen(0);
+    display.setTextColor(3);
     display.setTextSize(5);
-    display.setCursor(220, 220);
+    display.setCursor(220, 180);
     display.print("Powered off");
+
     display.setTextSize(2);
     display.setCursor(300, 320);
-    display.print("Press reset to wake");
+
+    if (display.getPreset() == &EPD_M5PAPER_S3_PRESET) {
+        display.print("Press reset to wake");
+    } else {
+        display.print("Press power button to wake");
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -680,16 +712,22 @@ void setup() {
     EPD_BootCtl boot(display.driver(), shutdownImage);
 
     if (boot.shutdownPending()) {
-        boot.shutdown();    // shows the shutdown screen and powers off — never returns
+        boot.shutdown();    // draws shutdown screen and powers off — never returns
     }
 
-    // Normal startup continues here
+    // Normal startup — show the appropriate wake instruction
     display.clear();
     display.fillScreen(0);
     display.setTextColor(3);
     display.setTextSize(3);
     display.setCursor(40, 260);
-    display.print("Press reset to power off.");
+
+    if (display.getPreset() == &EPD_M5PAPER_S3_PRESET) {
+        display.print("Press reset to power off.");
+    } else {
+        display.print("Press power button to power off.");
+    }
+
     display.paint();
 }
 
@@ -706,13 +744,16 @@ void loop() {
 
 Show a "Power off?" prompt and let the user cancel by pressing a button before committing to shutdown.
 
+On **LilyGo** boards the BOOT button (GPIO 0) cancels the shutdown. On the **M5PaperS3** there is no accessible BOOT button, so the confirmation auto-proceeds after 5 seconds with no cancel option.
+
 ```cpp
 // shutdown_confirm.ino
-// Shows a confirmation dialog when reset is pressed.
-// Press the BOOT button (GPIO 0) to cancel; do nothing to confirm after 5 seconds.
+// Shows a confirmation dialog when the power/reset button is pressed.
+// LilyGo: press BOOT button (GPIO 0) to cancel.
+// M5PaperS3: no cancel — proceeds automatically after 5 seconds.
 
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
 #include "EPD_Painter_Adafruit.h"
+#include "EPD_Painter_presets.h"    // gives access to preset names for board detection
 #include "epd_painter_bootctl.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -722,11 +763,15 @@ void drawMainScreen() {
     display.setTextColor(3);
     display.setTextSize(3);
     display.setCursor(40, 260);
-    display.print("Press reset to power off.");
+
+    if (display.getPreset() == &EPD_M5PAPER_S3_PRESET) {
+        display.print("Press reset to power off.");
+    } else {
+        display.print("Press power button to power off.");
+    }
 }
 
-void showConfirmDialog() {
-    // Draw a popup over the current screen content
+void showConfirmDialog(bool canCancel) {
     display.fillRect(240, 160, 480, 220, 0);        // white box
     display.drawRect(240, 160, 480, 220, 3);        // black border
     display.setTextColor(3);
@@ -736,14 +781,21 @@ void showConfirmDialog() {
     display.setTextSize(2);
     display.setCursor(270, 270);
     display.print("Confirm: do nothing (5s)");
-    display.setCursor(270, 310);
-    display.print("Cancel:  press BOOT button");
+    if (canCancel) {
+        display.setCursor(270, 310);
+        display.print("Cancel:  press BOOT button");
+    }
     display.paint();
 }
 
 void setup() {
     Serial.begin(115200);
-    pinMode(0, INPUT_PULLUP);           // BOOT button on GPIO 0
+
+    bool isM5Paper = (display.getPreset() == &EPD_M5PAPER_S3_PRESET);
+
+    if (!isM5Paper) {
+        pinMode(0, INPUT_PULLUP);       // BOOT button only available on LilyGo
+    }
 
     display.setAutoShutdown(false);
     if (!display.begin()) {
@@ -755,13 +807,12 @@ void setup() {
 
     if (boot.shutdownPending()) {
         drawMainScreen();
-        showConfirmDialog();
+        showConfirmDialog(!isM5Paper);  // M5Paper has no cancel button
 
-        // Wait up to 5 seconds for the user to cancel
+        // Wait up to 5 seconds — LilyGo users can press BOOT to cancel
         unsigned long deadline = millis() + 5000;
         while (millis() < deadline) {
-            if (digitalRead(0) == LOW) {
-                // BOOT button pressed — cancel shutdown, resume normally
+            if (!isM5Paper && digitalRead(0) == LOW) {
                 boot.cancelShutdown();
                 break;
             }
@@ -773,7 +824,6 @@ void setup() {
         }
 
         // Cancelled — redraw the main screen
-        display.fillScreen(0);
         drawMainScreen();
         display.paint();
         return;
