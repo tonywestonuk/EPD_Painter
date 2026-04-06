@@ -1034,6 +1034,21 @@ void EPD_Painter::dither(uint8_t* fb, uint16_t width, uint16_t height) {
 }
 
 // =============================================================================
+// packBuffer()
+// =============================================================================
+uint8_t* EPD_Painter::packBuffer(const uint8_t* fb) const {
+    const size_t packed_size = (size_t)_config.width * _config.height / 4;
+    uint8_t* buf = static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+    if (!buf) return nullptr;
+    if (_config.rotation == Rotation::ROTATION_CW)
+        compact_pixels_rotated_cw(fb, buf, _config.height, _config.width);
+    else
+        epd_painter_compact_pixels(fb, buf, (uint32_t)_config.width * _config.height);
+    return buf;
+}
+
+// =============================================================================
 // autoDetectBoard()
 //
 // AUTO preset fallback used by begin().

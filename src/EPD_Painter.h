@@ -156,6 +156,12 @@ struct PowerCtlConfig {
   // (~2 KB for a 960-wide panel) internally.
   static void dither(uint8_t* fb, uint16_t width, uint16_t height);
 
+  // Pack an 8bpp framebuffer to the driver's 2bpp packed format, respecting
+  // the current rotation setting. Returns a PSRAM-allocated buffer the caller
+  // must free with heap_caps_free(). Returns nullptr on allocation failure.
+  // Use this to obtain a packed buffer suitable for EPD_BootCtl::IImageProvider.
+  uint8_t* packBuffer(const uint8_t* fb) const;
+
   const Config& getConfig(){
     return _config;
   }

@@ -87,6 +87,11 @@ public:
     void fxClear() { _painter.fxClear(); }
     void dither() { EPD_Painter::dither(buffer, _painter._config.width, _painter._config.height); }
 
+    // Pack the current framebuffer to 2bpp. Returns a PSRAM-allocated buffer
+    // the caller must free with heap_caps_free(). Returns nullptr on failure.
+    // Use this to supply packed image data to EPD_BootCtl::IImageProvider.
+    uint8_t* packBuffer() { return _painter.packBuffer(buffer); }
+
     // -------------------------------------------------------------------------
     // Quality
     // -------------------------------------------------------------------------

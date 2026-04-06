@@ -25,6 +25,7 @@ On top of that:
 |---|---|---|
 | M5Stack M5PaperS3 | 960×540 | `EPD_PAINTER_PRESET_M5PAPER_S3` |
 | LilyGo T5 S3 GPS | 960×540 | `EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS` |
+| LilyGo T5 S3 H752 | 960×540 | `EPD_PAINTER_PRESET_LILYGO_T5_S3_H752` |
 
 ---
 
@@ -95,9 +96,16 @@ Use an explicit preset when you know the target hardware at compile time and wan
 | Function | Description |
 |---|---|
 | `begin()` | Allocate buffers, init hardware and I2C |
-| `paint()` | Delta-update the panel; first pass blocks, second pass runs in background |
+| `paint()` | Delta-update the panel; blocks until the paint task picks it up, second pass runs in background |
 | `paintLater()` | Fully non-blocking paint — hands off to background task immediately |
-| `clear()` | Drive the **physical panel** to full white; removes ghosting |
+| `paintPacked()` | Paint from a pre-packed 2bpp buffer, skipping compaction |
+| `unpaintPacked()` | DC-balance pass — drives every pixel in a packed buffer back toward white |
+| `clear()` | Drive the **physical panel** to full white; optional rect list and `ClearMode` (HARD/SOFT) |
+| `clearDirtyAreas()` | Compact framebuffer, compute dirty rects, clear only those areas |
+| `computeDirtyRects()` | Return dirty rectangles between current display state and new framebuffer |
+| `fxClear()` | Animated sweep-bar clear effect |
+| `clearBuffers()` | Zero all packed buffers — reset DC-balance baseline before power-off |
+| `dither()` | Floyd-Steinberg dither an 8bpp greyscale buffer in-place to 4-level encoding |
 | `setQuality(q)` | `QUALITY_HIGH` / `QUALITY_NORMAL` / `QUALITY_FAST` — trades refresh speed for black depth |
 
 **Ghosting removal:**
@@ -125,28 +133,17 @@ For the LVGL binding, use the provided colour constants (`EPD_PainterLVGL::WHITE
 
 ---
 
-## Shutdown handling.
+## Shutdown handling
 
-EPD_Painter checks a shutdown flag on initalisation. When the device is reset (either by software, or pressing the reset button), if this is set to shutdown, it will begin a shutdown sequence:
-- The Existing image is erased. (Image data stored in PSRAM data survives a reset)
-- The screen is cleared
-- an shutdown image '/.epd_painter_shutdown.img' is loaded from little_fs, and output to the EPD.
-- Device is powered off.
+EPD_Painter provides graceful shutdown via `EPD_BootCtl`, handling the DC-balance and screen-state reconciliation problems that arise from EPD panels retaining their image through power loss.
 
-If the flag is set to startup normally, then:
-- The shutdown image is first loaded from little_fs and is 'unpainted' from the EPD screen. This keeps DC balance by sending the reverse pulses to the screen that were sent, when the device was first turned off.
-- The screen is cleared.
-- Device continues to boot normally.
+**Default behaviour (`setAutoShutdown(true)`):** `begin()` handles everything automatically. Pressing reset while running triggers a shutdown sequence — a shutdown image is painted, packed pixel data is stored in NVS, and the device powers off. On the next boot the stored image is undrawn (DC balance), then normal operation resumes.
 
-If the file is not present, a Mandelbrot fractal is generated as a fallback. The file format is raw 2bpp packed pixels — 4 pixels per byte, `00`=white through `11`=black — matching the driver's internal format.
+**Custom behaviour (`setAutoShutdown(false)`):** Create your own `EPD_BootCtl` instance and check `shutdownPending()` in `setup()` or `loop()` to intercept and show a confirmation UI before deciding to call `shutdown()` or `cancelShutdown()`.
 
-You can create your own shutdown screen by using ImageMagick, as follows. Once created upload it to your device's little_fs partition.
+The fallback shutdown image is a built-in fractal pattern. To supply your own, implement `EPD_BootCtl::IImageProvider` and return a PSRAM-allocated packed 2bpp buffer.
 
-```bash
-convert input.png -resize 960x540! -colorspace Gray \
-  -posterize 4 -negate -depth 2 -type Grayscale \
-  gray:.epd_painter_shutdown.img
-```
+See [reference_manual.md](reference_manual.md) for full shutdown API documentation and examples.
 
 ---
 
