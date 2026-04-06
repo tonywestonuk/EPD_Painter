@@ -54,7 +54,6 @@ If you need access to the I2C bus (e.g. to talk to other devices on the same bus
 ```cpp
 TwoWire* wire = display.getConfig().i2c.wire;
 wire->beginTransmission(0x51);  // talk to another device on the bus
-// ...
 ```
 
 ---
@@ -149,7 +148,7 @@ display.paint();   // pushes current framebuffer onto the clean panel
 Convenience function: compacts the framebuffer, computes dirty rectangles, then calls `clear()` on only those areas.
 
 ```cpp
-display.clearDirtyAreas();                                       // default tolerance=0, SOFT mode
+display.clearDirtyAreas();                                        // default tolerance=0, SOFT mode
 display.clearDirtyAreas(tolerance, EPD_Painter::ClearMode::HARD);
 ```
 
@@ -204,7 +203,7 @@ display.clearBuffers();
 
 Packs an 8bpp framebuffer into the driver's 2bpp format, respecting the current rotation setting. Returns a PSRAM-allocated buffer that the caller must free with `heap_caps_free()`. Returns `nullptr` on allocation failure.
 
-This is the bridge between Adafruit GFX drawing and `EPD_BootCtl::IImageProvider` — it lets you draw a shutdown image with the normal GFX API and hand it to the boot control system in the correct packed format.
+This is the bridge between Adafruit GFX drawing and `EPD_BootCtl` — it lets you draw a shutdown image with the normal GFX API and hand it to the boot control system in the correct packed format.
 
 ```cpp
 // Adafruit binding — packs the internal framebuffer
@@ -244,14 +243,6 @@ Adjusts waveform latch timing, trading refresh speed for image quality.
 | `EPD_Painter::Quality::QUALITY_NORMAL` | Default — good balance for most use cases |
 | `EPD_Painter::Quality::QUALITY_FAST` | Shortest latch delay — fastest refresh, lighter blacks |
 
-```cpp
-display.setQuality(EPD_Painter::Quality::QUALITY_FAST);
-display.paint();   // quick update
-
-display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
-display.paint();   // high quality render
-```
-
 Quality can be changed at any time between `paint()` calls.
 
 ---
@@ -264,12 +255,6 @@ The driver supports two orientations:
 |---|---|---|
 | `ROTATION_0` (default) | 960×540 landscape | 960×540 |
 | `ROTATION_CW` | 540×960 portrait canvas | 960×540 (rotated 90° CW) |
-
-Set via the config before constructing the display object:
-
-```cpp
-EPD_PainterAdafruit display(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
-```
 
 In portrait mode, the GFX canvas dimensions are swapped (width↔height). Drawing coordinates map to the rotated physical panel. The compaction step performs the rotation in a single cache-friendly pass — no performance penalty compared to landscape.
 
@@ -296,12 +281,10 @@ More grey levels would break this clean 1:1 mapping, requiring significantly mor
 
 Panel power (high-voltage supply) is managed automatically — you do not call `powerOn()` or `powerOff()` directly.
 
-The `PanelPowerGuard` mechanism works as follows:
 - Power turns **on** automatically at the start of any `paint()`, `clear()`, or `fxClear()` call
-- A background task decrements an internal counter every second
 - Power turns **off** approximately 5 seconds after the last painting activity
 
-This means the panel is only energised while actively refreshing, and powers down automatically during idle periods. No explicit power management is needed in user code.
+No explicit power management is needed in user code.
 
 ---
 
@@ -309,7 +292,7 @@ This means the panel is only energised while actively refreshing, and powers dow
 
 ### Why an EPD driver needs shutdown management
 
-An e-paper display retains its image indefinitely with no power. The driver maintains `packed_screenbuffer` — a software model of exactly what is physically shown — which is lost when the device powers off. On the next boot the software assumes the screen is blank (all white), but the panel still shows whatever it last displayed. Without reconciliation:
+An e-paper display retains its image indefinitely with no power. The driver maintains a software model of exactly what is physically shown — which is lost when the device powers off. On the next boot the software assumes the screen is blank (all white), but the panel still shows whatever it last displayed. Without reconciliation:
 
 - `paint()` computes wrong deltas — it thinks pixels are white when they aren't
 - Images build up as ghost layers rather than replacing each other cleanly
@@ -321,238 +304,34 @@ An e-paper display retains its image indefinitely with no power. The driver main
   Power-off                             Power-on (next boot)
   ──────────────────────────────────    ──────────────────────────────────────
   1. Paint shutdown image to panel      1. Load shutdown image from NVS
-  2. Store packed image data in NVS     2. unpaintPacked() drives it off screen
-  3. Power off hardware                    (screenbuffer reconciled → all white)
-                                        3. Normal operation begins
+  2. Store packed image data in NVS     2. Drive it back toward white (DC balance)
+  3. Power off hardware                 3. Normal operation begins
 ```
 
 ---
 
 ### How the reset-to-shutdown mechanism works
 
-Shutdown is triggered by pressing the hardware reset button while the device is running on battery. `EPD_BootCtl` uses NVS to track state:
+Shutdown is triggered by pressing the hardware reset button while the device is running on battery. The device **arms itself on every normal boot**, so a single reset press is all that's needed.
 
-- `flag = false` — device was at rest; this is a normal boot
-- `flag = true` — device was running; this reset is a shutdown request
-
-The device **arms itself on every normal boot**, so a single reset press is all that's needed.
-
-```
-  Normal boot (flag = false):
-    Write flag = true  (arm — device is now running)
-    If shutdown image exists in NVS:
-      unpaintPacked() — drive it off the panel (DC balance)
-    Normal operation proceeds
-
-  User presses reset (flag = true):
-    Write flag = false  (clear — next boot will be normal)
-    shutdownPending() returns true
-    If autoShutdown = true:  shutdown() called automatically [[noreturn]]
-    If autoShutdown = false: deferred to user code
-```
-
-If `shutdown()` is called and the hardware power-off fails (e.g. USB is connected), `ESP.restart()` is called automatically and the device boots normally.
+When powered via USB, shutdown is bypassed entirely — pressing reset always does a clean normal boot. This is the expected behaviour during development.
 
 ---
 
-### USB power behaviour
-
-When powered via USB, the shutdown state machine is bypassed entirely. `EPD_BootCtl` detects VBUS presence via the BQ25896 charger IC and skips all NVS flag logic. Pressing reset while on USB always produces a clean normal boot — the expected behaviour during development.
+## Examples
 
 ---
 
-### Default behaviour (`setAutoShutdown(true)`)
-
-With default settings, `begin()` handles everything transparently:
+### Hello World — M5PaperS3
 
 ```cpp
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#include "EPD_Painter_Adafruit.h"
-#include "LittleFS.h"
+// hello_world.ino
+// Displays "Hello, EPD!" on the M5PaperS3.
+// Change the #define to match your board.
 
-EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
-
-void setup() {
-    Serial.begin(115200);
-    LittleFS.begin(true);
-
-    if (!display.begin()) {      // DC-balance and shutdown handled inside begin()
-        Serial.println("init failed");
-        while (1);
-    }
-
-    display.clear();
-    display.setTextColor(3);
-    display.setCursor(40, 260);
-    display.print("Press reset to power off.");
-    display.paint();
-}
-
-void loop() {}
-```
-
-On a normal boot the DC-balance unpaint runs silently and the app starts. The device is now armed — pressing reset triggers shutdown automatically.
-
----
-
-### Intercepting shutdown — showing a confirmation screen
-
-Set `setAutoShutdown(false)` before `begin()`. Then create your own `EPD_BootCtl` instance in `setup()` or `loop()` and check `shutdownPending()`:
-
-```cpp
-#include "epd_painter_bootctl.h"
-
-EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
-
-void setup() {
-    Serial.begin(115200);
-
-    display.setAutoShutdown(false);   // handle shutdown yourself
-
-    if (!display.begin()) {
-        Serial.println("init failed");
-        while (1);
-    }
-
-    EPD_BootCtl boot(display.driver());
-
-    if (boot.shutdownPending()) {
-        // Show confirmation UI, wait for user input...
-        // To proceed:  boot.shutdown();      // [[noreturn]]
-        // To cancel:   boot.cancelShutdown();
-    }
-
-    drawMainScreen();
-    display.paint();
-}
-```
-
----
-
-### Custom shutdown image — drawn with Adafruit GFX
-
-The cleanest way to create a shutdown image is to draw it with the normal Adafruit GFX API and use `packBuffer()` to convert it to the packed format `EPD_BootCtl` expects.
-
-Implement `EPD_BootCtl::IImageProvider` and draw inside `getBootImage()`:
-
-```cpp
-#include "epd_painter_bootctl.h"
-
-class GFXShutdownImage : public EPD_BootCtl::IImageProvider {
-public:
-    GFXShutdownImage(EPD_PainterAdafruit& display) : _display(display) {}
-
-    uint8_t* getBootImage(uint16_t w, uint16_t h) override {
-        // Draw the shutdown screen using normal Adafruit GFX calls
-        _display.fillScreen(0);
-        _display.setTextColor(3);
-        _display.setTextSize(4);
-        _display.setCursor(240, 240);
-        _display.print("Powered off");
-
-        // Pack to 2bpp — EPD_BootCtl takes ownership and frees this buffer
-        return _display.packBuffer();
-    }
-
-private:
-    EPD_PainterAdafruit& _display;
-};
-```
-
-Usage in `setup()`:
-
-```cpp
-EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
-
-void setup() {
-    display.setAutoShutdown(false);   // handle shutdown manually
-    display.begin();
-
-    GFXShutdownImage shutdownImage(display);
-    EPD_BootCtl boot(display.driver(), shutdownImage);
-
-    if (boot.shutdownPending()) {
-        boot.shutdown();   // [[noreturn]] — draws image, stores to NVS, powers off
-    }
-
-    // Normal startup — continue drawing your application UI
-    drawMainScreen();
-    display.paint();
-}
-```
-
-`getBootImage()` is called twice by `EPD_BootCtl` — once on shutdown (to paint the image to the panel) and once on the next startup (to unpaint it for DC balance). The drawing code runs both times, so the image is reconstructed from scratch each boot rather than stored in RAM across resets.
-
-### Custom shutdown image — from raw data
-
-If you prefer to supply pre-packed binary data (e.g. loaded from LittleFS or generated offline with ImageMagick), implement `getBootImage()` to return that buffer directly:
-
-```cpp
-class StoredShutdownImage : public EPD_BootCtl::IImageProvider {
-public:
-    uint8_t* getBootImage(uint16_t w, uint16_t h) override {
-        size_t sz = (size_t)w * h / 4;
-        uint8_t* buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
-        // Load from LittleFS, flash, etc.
-        File f = LittleFS.open("/shutdown.img", "r");
-        if (f) f.read(buf, sz);
-        return buf;   // EPD_BootCtl frees this buffer
-    }
-};
-```
-
-The buffer format is raw 2bpp packed pixels — 4 pixels per byte, MSB-first, row by row:
-
-```
-Bits 7-6 → pixel 0 (leftmost)
-Bits 5-4 → pixel 1
-Bits 3-2 → pixel 2
-Bits 1-0 → pixel 3
-```
-
-File size for 960×540: `960 × 540 / 4 = 129,600 bytes`.
-
-To generate from an image using ImageMagick:
-
-```bash
-convert input.png -resize 960x540! -colorspace Gray \
-  -posterize 4 -negate -depth 2 -type Grayscale \
-  gray:shutdown.img
-```
-
----
-
-### `EPD_BootCtl` API summary
-
-| Method | Description |
-|---|---|
-| `EPD_BootCtl(epd)` | Construct with default fractal image; reads NVS flag, runs DC-balance unpaint on normal boot |
-| `EPD_BootCtl(epd, provider)` | Construct with custom `IImageProvider` |
-| `shutdownPending()` | Returns `true` if a shutdown was requested on the previous reset |
-| `cancelShutdown()` | Dismiss the pending shutdown — sets `shutdownPending()` to false. Next reset will be pending again |
-| `shutdown()` | Paint the shutdown image, store to NVS, power off. `[[noreturn]]` |
-
----
-
-## Adafruit GFX Binding
-
-Wraps `EPD_PainterAdafruit`, which extends `GFXcanvas8`. All standard Adafruit GFX drawing functions are available — `print()`, `drawLine()`, `drawBitmap()`, `fillRect()`, `setFont()`, etc.
-
-Pixel values are 8bpp, but only the two least-significant bits are used, giving four shades:
-
-| Value | Shade |
-|---|---|
-| `0` | White |
-| `1` | Light grey |
-| `2` | Dark grey |
-| `3` | Black |
-
-`fillRect()` is overridden to use `memset` directly on the 8bpp buffer rather than the Adafruit GFX pixel-by-pixel loop — significantly faster for large fills.
-
-### Complete example — M5PaperS3
-
-```cpp
 #define EPD_PAINTER_PRESET_M5PAPER_S3
+// #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+// #define EPD_PAINTER_PRESET_LILYGO_T5_S3_H752
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -561,27 +340,121 @@ void setup() {
     Serial.begin(115200);
 
     if (!display.begin()) {
-        Serial.println("Display init failed");
+        Serial.println("Display init failed — check board selection");
         while (1);
     }
 
-    display.fillScreen(0);               // white background
-    display.setTextColor(3);             // black text
+    display.fillScreen(0);          // 0 = white background
+    display.setTextColor(3);        // 3 = black text
     display.setTextSize(3);
     display.setCursor(40, 40);
     display.print("Hello, EPD!");
 
-    display.drawRect(20, 20, 400, 80, 3);
+    display.drawRect(20, 20, 400, 80, 3);   // draw a black rectangle
+
+    display.paint();                // push to display
+}
+
+void loop() {
+    // nothing — static display
+}
+```
+
+---
+
+### Counter — updating the display in a loop
+
+```cpp
+// counter.ino
+// Counts upward and updates the display every 500ms.
+// Only changed pixels are redrawn each frame.
+
+#define EPD_PAINTER_PRESET_M5PAPER_S3
+#include "EPD_Painter_Adafruit.h"
+
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+int counter = 0;
+
+void setup() {
+    Serial.begin(115200);
+
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+
+    display.fillScreen(0);
     display.paint();
 }
 
-void loop() {}
+void loop() {
+    display.fillScreen(0);          // clear framebuffer to white
+    display.setTextColor(3);
+    display.setTextSize(6);
+    display.setCursor(100, 220);
+    display.print(counter++);
+
+    display.paint();                // only changed pixels are driven
+    delay(500);
+}
 ```
 
-### Complete example — LilyGo T5 S3 GPS
+---
+
+### Removing ghosting periodically
+
+After many updates, faint ghost images can accumulate. Clear the panel every N frames to reset it.
 
 ```cpp
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+// ghosting_removal.ino
+// Clears the panel every 20 frames to remove accumulated ghosting.
+
+#define EPD_PAINTER_PRESET_M5PAPER_S3
+#include "EPD_Painter_Adafruit.h"
+
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+int frameCount = 0;
+
+void setup() {
+    Serial.begin(115200);
+
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+}
+
+void loop() {
+    // Every 20 frames, do a full hardware clear to remove ghosting
+    if (frameCount % 20 == 0) {
+        display.clear();            // drives the physical panel to white
+    }
+
+    display.fillScreen(0);
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(40, 240);
+    display.print("Frame: ");
+    display.print(frameCount);
+
+    display.paint();
+    frameCount++;
+    delay(200);
+}
+```
+
+---
+
+### Quality settings — fast animation then sharp final frame
+
+```cpp
+// quality_demo.ino
+// Animates text scrolling across the screen using FAST quality (lighter blacks
+// but higher speed), then renders a sharp final frame at HIGH quality.
+
+#define EPD_PAINTER_PRESET_M5PAPER_S3
 #include "EPD_Painter_Adafruit.h"
 
 EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
@@ -594,89 +467,113 @@ void setup() {
         while (1);
     }
 
-    display.clear();
+    // Animate with FAST quality — quickest refresh, slightly lighter blacks
+    display.setQuality(EPD_Painter::Quality::QUALITY_FAST);
 
-    display.fillScreen(0);
-    display.setTextColor(3);
-    display.setTextSize(2);
-    display.setCursor(10, 10);
-    display.print("LilyGo T5 S3 GPS");
+    for (int x = 0; x < 800; x += 8) {
+        display.fillScreen(0);
+        display.setTextColor(3);
+        display.setTextSize(4);
+        display.setCursor(x, 240);
+        display.print(">>>");
+        display.paint();
+    }
 
-    display.paint();
-}
-
-void loop() {}
-```
-
-### Updating content in a loop
-
-```cpp
-int counter = 0;
-
-void loop() {
+    // Final frame at HIGH quality — deepest blacks, slowest
+    display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
     display.fillScreen(0);
     display.setTextColor(3);
     display.setTextSize(4);
-    display.setCursor(100, 220);
-    display.print(counter++);
-
-    display.paint();   // delta update — only changed pixels are driven
-    delay(500);
+    display.setCursor(300, 240);
+    display.print("Done!");
+    display.paint();
 }
-```
 
-### Removing ghosting periodically
-
-```cpp
 void loop() {
-    static int refreshCount = 0;
-
-    if (refreshCount++ % 20 == 0) {
-        display.clear();   // full clear every 20 frames
-    }
-
-    display.setTextColor(3);
-    display.setCursor(50, 50);
-    display.print("Frame: ");
-    display.print(refreshCount);
-
-    display.paint();
-}
-```
-
-### Portrait mode
-
-```cpp
-#define EPD_PAINTER_PRESET_M5PAPER_S3
-#include "EPD_Painter_Adafruit.h"
-
-// Canvas is 540 wide × 960 tall; rotated 90° CW to the physical 960×540 panel
-EPD_PainterAdafruit display(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
-
-void setup() {
-    display.begin();
-    display.fillScreen(0);
-    display.setTextColor(3);
-    display.setTextSize(3);
-    display.setCursor(20, 20);
-    display.print("Portrait");   // draws in portrait coordinates
-    display.paint();
+    // nothing
 }
 ```
 
 ---
 
-## LVGL v9 Binding
+### Portrait mode
 
-`EPD_PainterLVGL` registers the EPD as an LVGL display. LVGL renders directly into the shared framebuffer; the flush callback calls `paintLater()` automatically. You do not call `paint()` yourself.
+```cpp
+// portrait.ino
+// Draws in portrait orientation (540 wide x 960 tall canvas).
+// The driver rotates the output to fit the physical 960x540 landscape panel.
 
-**Requirements:**
-- `LV_COLOR_DEPTH 8` in `lv_conf.h`
-- LVGL v9
+#define EPD_PAINTER_PRESET_M5PAPER_S3
+#include "EPD_Painter_Adafruit.h"
 
-### Colour constants
+// withRotation() returns a modified copy of the preset — no other changes needed
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
 
-Use the provided constants instead of `lv_color_black()` / `lv_color_white()`. LVGL renders RGB332; the EPD driver reads the two LSBs of the blue channel.
+void setup() {
+    Serial.begin(115200);
+
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+
+    // Canvas is now 540 wide x 960 tall
+    display.fillScreen(0);
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(20, 20);
+    display.print("Portrait");
+    display.setCursor(20, 80);
+    display.print("540 x 960");
+
+    display.paint();
+}
+
+void loop() {
+    // nothing
+}
+```
+
+---
+
+### LVGL Hello World
+
+```cpp
+// lvgl_hello.ino
+// Minimal LVGL setup. Requires: LVGL v9, LV_COLOR_DEPTH 8 in lv_conf.h
+
+#define EPD_PAINTER_PRESET_M5PAPER_S3
+#include "EPD_Painter_LVGL.h"
+
+EPD_PainterLVGL display(EPD_PAINTER_PRESET);
+
+void setup() {
+    Serial.begin(115200);
+
+    lv_init();
+    lv_tick_set_cb([]() -> uint32_t { return millis(); });
+
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+
+    display.clear();    // remove any ghosting before first render
+
+    // Create a centred label using LVGL
+    lv_obj_t *label = lv_label_create(lv_screen_active());
+    lv_label_set_text(label, "Hello LVGL!");
+    lv_obj_set_style_text_color(label, EPD_PainterLVGL::BLACK, 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+}
+
+void loop() {
+    lv_timer_handler();     // LVGL calls paint() automatically — don't call it yourself
+    delay(5);
+}
+```
+
+Use the provided colour constants — standard LVGL colour functions will not produce the correct shades:
 
 ```cpp
 EPD_PainterLVGL::WHITE     // 0 — white
@@ -685,64 +582,224 @@ EPD_PainterLVGL::DK_GREY   // 2 — dark grey
 EPD_PainterLVGL::BLACK     // 3 — black
 ```
 
-### Complete example — M5PaperS3 with LVGL
+---
+
+### Shutdown — automatic (simplest)
+
+With default settings, pressing reset while running on battery triggers a shutdown sequence automatically. No extra code is needed.
 
 ```cpp
-#define EPD_PAINTER_PRESET_M5PAPER_S3
-#include "EPD_Painter_LVGL.h"
+// shutdown_auto.ino
+// Press reset while on battery to power off gracefully.
+// On the next boot, the display is cleaned up automatically before the app starts.
 
-EPD_PainterLVGL display(EPD_PAINTER_PRESET);
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#include "EPD_Painter_Adafruit.h"
 
-static uint32_t my_tick_cb(void) {
-    return millis();
-}
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
 
 void setup() {
     Serial.begin(115200);
 
-    lv_init();
-    lv_tick_set_cb(my_tick_cb);
-
+    // begin() handles everything: DC-balance on startup, shutdown on reset
     if (!display.begin()) {
         Serial.println("Display init failed");
         while (1);
     }
 
     display.clear();
-
-    lv_obj_t *label = lv_label_create(lv_screen_active());
-    lv_label_set_text(label, "Hello LVGL!");
-    lv_obj_set_style_text_color(label, EPD_PainterLVGL::BLACK, 0);
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+    display.fillScreen(0);
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(40, 260);
+    display.print("Press reset to power off.");
+    display.paint();
 }
 
 void loop() {
-    lv_timer_handler();   // LVGL drives paint() internally via flush callback
-    delay(5);
+    // nothing
+}
+```
+
+The device arms itself on every normal boot. Pressing reset once triggers shutdown — a built-in fractal image is painted to the screen, pixel state is saved, and the device powers off. On the next boot the fractal is undrawn (DC balance) and the app starts normally.
+
+---
+
+### Shutdown — with a custom "Powered off" screen drawn using Adafruit GFX
+
+If you want to control what appears on the screen when the device powers off, draw it yourself using the normal Adafruit GFX functions.
+
+The boilerplate below is the connection between your drawing code and the shutdown system. **Copy it exactly and only change the drawing inside `drawShutdownScreen()`.**
+
+```cpp
+// shutdown_custom_image.ino
+// Shows a custom "Powered off" screen when the device shuts down.
+// Only edit the drawShutdownScreen() function — leave everything else as-is.
+
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#include "EPD_Painter_Adafruit.h"
+#include "epd_painter_bootctl.h"
+
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+// -----------------------------------------------------------------------
+// Edit this function to design your shutdown screen.
+// Use any normal Adafruit GFX drawing calls.
+// -----------------------------------------------------------------------
+void drawShutdownScreen() {
+    display.fillScreen(0);              // white background
+    display.setTextColor(3);            // black text
+    display.setTextSize(5);
+    display.setCursor(220, 220);
+    display.print("Powered off");
+    display.setTextSize(2);
+    display.setCursor(300, 320);
+    display.print("Press reset to wake");
+}
+
+// -----------------------------------------------------------------------
+// Boilerplate — copy this block exactly, do not change it
+// -----------------------------------------------------------------------
+class ShutdownImage : public EPD_BootCtl::IImageProvider {
+    uint8_t* getBootImage(uint16_t w, uint16_t h) override {
+        drawShutdownScreen();
+        return display.packBuffer();    // converts drawing to packed format
+    }
+} shutdownImage;
+// -----------------------------------------------------------------------
+
+void setup() {
+    Serial.begin(115200);
+
+    display.setAutoShutdown(false);     // we handle shutdown ourselves below
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+
+    EPD_BootCtl boot(display.driver(), shutdownImage);
+
+    if (boot.shutdownPending()) {
+        boot.shutdown();    // shows the shutdown screen and powers off — never returns
+    }
+
+    // Normal startup continues here
+    display.clear();
+    display.fillScreen(0);
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(40, 260);
+    display.print("Press reset to power off.");
+    display.paint();
+}
+
+void loop() {
+    // nothing
+}
+```
+
+> `drawShutdownScreen()` is called twice internally — once when shutting down (to paint it) and once on the next startup (to drive it back toward white for DC balance). Both times it is reconstructed from your drawing code, so nothing needs to persist across resets.
+
+---
+
+### Shutdown — with a confirmation dialog
+
+Show a "Power off?" prompt and let the user cancel by pressing a button before committing to shutdown.
+
+```cpp
+// shutdown_confirm.ino
+// Shows a confirmation dialog when reset is pressed.
+// Press the BOOT button (GPIO 0) to cancel; do nothing to confirm after 5 seconds.
+
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#include "EPD_Painter_Adafruit.h"
+#include "epd_painter_bootctl.h"
+
+EPD_PainterAdafruit display(EPD_PAINTER_PRESET);
+
+void drawMainScreen() {
+    display.fillScreen(0);
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(40, 260);
+    display.print("Press reset to power off.");
+}
+
+void showConfirmDialog() {
+    // Draw a popup over the current screen content
+    display.fillRect(240, 160, 480, 220, 0);        // white box
+    display.drawRect(240, 160, 480, 220, 3);        // black border
+    display.setTextColor(3);
+    display.setTextSize(3);
+    display.setCursor(310, 200);
+    display.print("Power off?");
+    display.setTextSize(2);
+    display.setCursor(270, 270);
+    display.print("Confirm: do nothing (5s)");
+    display.setCursor(270, 310);
+    display.print("Cancel:  press BOOT button");
+    display.paint();
+}
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(0, INPUT_PULLUP);           // BOOT button on GPIO 0
+
+    display.setAutoShutdown(false);
+    if (!display.begin()) {
+        Serial.println("Display init failed");
+        while (1);
+    }
+
+    EPD_BootCtl boot(display.driver());
+
+    if (boot.shutdownPending()) {
+        drawMainScreen();
+        showConfirmDialog();
+
+        // Wait up to 5 seconds for the user to cancel
+        unsigned long deadline = millis() + 5000;
+        while (millis() < deadline) {
+            if (digitalRead(0) == LOW) {
+                // BOOT button pressed — cancel shutdown, resume normally
+                boot.cancelShutdown();
+                break;
+            }
+            delay(50);
+        }
+
+        if (boot.shutdownPending()) {
+            boot.shutdown();            // confirmed — powers off, never returns
+        }
+
+        // Cancelled — redraw the main screen
+        display.fillScreen(0);
+        drawMainScreen();
+        display.paint();
+        return;
+    }
+
+    // Normal startup
+    drawMainScreen();
+    display.paint();
+}
+
+void loop() {
+    // nothing
 }
 ```
 
 ---
 
-## `setQuality()` examples
+## `EPD_BootCtl` API summary
 
-```cpp
-// Fast scrolling / animation
-display.setQuality(EPD_Painter::Quality::QUALITY_FAST);
-for (int i = 0; i < 100; i++) {
-    display.fillScreen(0);
-    display.setCursor(i * 4, 200);
-    display.print(">>>");
-    display.paint();
-}
-
-// Final high-quality render
-display.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
-display.fillScreen(0);
-display.setCursor(40, 200);
-display.print("Done.");
-display.paint();
-```
+| Method | Description |
+|---|---|
+| `EPD_BootCtl(epd)` | Construct with default fractal image; reads NVS flag, runs DC-balance on normal boot |
+| `EPD_BootCtl(epd, provider)` | Construct with custom `IImageProvider` for a drawn shutdown screen |
+| `shutdownPending()` | Returns `true` if reset was pressed while running on battery |
+| `cancelShutdown()` | Dismiss the pending shutdown — next reset will be pending again |
+| `shutdown()` | Paint the shutdown image, store to NVS, power off — never returns |
 
 ---
 
@@ -760,7 +817,7 @@ display.paint();
 | `computeDirtyRects()` | no | Return dirty rectangles between screen state and new framebuffer |
 | `fxClear()` | yes | Animated sweep-bar clear effect |
 | `clearBuffers()` | no | Zero all packed buffers — reset DC-balance baseline |
-| `packBuffer()` | no | Pack 8bpp framebuffer to 2bpp — for use with `EPD_BootCtl::IImageProvider` |
+| `packBuffer()` | no | Pack 8bpp framebuffer to 2bpp — for use with custom shutdown images |
 | `dither()` | no | Floyd-Steinberg dither 8bpp greyscale buffer in-place to 4 levels |
 | `setQuality(q)` | — | Set waveform timing for next paint |
 | `setAutoShutdown(bool)` | — | If `false`, `EPD_BootCtl` must be managed manually |
