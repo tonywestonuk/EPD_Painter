@@ -4,6 +4,9 @@
 #include <EPD_Painter.h>
 #include "epd_pin_driver.h"
 
+// =============================================================================
+// epd_painter_powerctl — TPS65185 PMIC + PCA9535 I/O expander (M5PaperS3).
+// =============================================================================
 class epd_painter_powerctl : public EPD_PowerDriver {
 public:
   epd_painter_powerctl();
@@ -62,7 +65,6 @@ private:
 
 // =============================================================================
 // EPD_GpioPowerDriver — direct GPIO power control (e.g. M5PaperS3).
-// Used when there is no PMIC or shift register managing the panel rails.
 // =============================================================================
 class EPD_GpioPowerDriver : public EPD_PowerDriver {
 public:
@@ -91,73 +93,54 @@ private:
 
 // =============================================================================
 // epd_painter_powerctl_74HCT4094D — shift-register power driver for H752.
-// QP5 = PWR_EN, QP1-3 unused.
+//
+//   QP0 = EP_LE   QP4 = EP_STV   QP5 = PWR_EN   QP6 = EP_MODE   QP7 = EP_OE
+//   QP1-3 unused
 // =============================================================================
-class epd_painter_powerctl_74HCT4094D : public EPD_PowerDriver, public EPD_ISRController {
+class epd_painter_powerctl_74HCT4094D : public EPD_PowerDriver {
 public:
-  epd_painter_powerctl_74HCT4094D();
-
   bool begin(EPD_Painter::Config& config);
-
   bool powerOn() override;
   void powerOff() override;
-
-  void IRAM_ATTR sr_set_bit(uint8_t index, bool val) override;
+  EPD_ISRController* isrController() override { return &_sr_hw; }
 
 private:
-  EPD_Painter::Config* config;
+  EPD_ShiftReg _sr_hw;
 
-  struct ShiftState {
-    bool ep_latch_enable   = false; // QP0 -> EP_LE
-    bool q1_unused         = false; // QP1
-    bool q2_unused         = false; // QP2
-    bool q3_unused         = false; // QP3
-    bool ep_stv            = false; // QP4 -> EP_STV / SPV
-    bool power_enable      = false; // QP5 -> PWR_EN
-    bool ep_mode           = false; // QP6 -> EP_MODE
-    bool ep_output_enable  = false; // QP7 -> EP_OE
-  } _sr;
-
-  void sr_push_bits();
+  // Named pins for power sequencing — all route through _sr_hw
+  EPD_SRPin _pin_le   {&_sr_hw, 0};  // QP0 -> EP_LE
+  EPD_SRPin _pin_stv  {&_sr_hw, 4};  // QP4 -> EP_STV
+  EPD_SRPin _pin_pwr  {&_sr_hw, 5};  // QP5 -> PWR_EN
+  EPD_SRPin _pin_mode {&_sr_hw, 6};  // QP6 -> EP_MODE
+  EPD_SRPin _pin_oe   {&_sr_hw, 7};  // QP7 -> EP_OE
 };
 
 // =============================================================================
 // EPD_H716PowerDriver — shift-register power driver for LilyGo EPD47 H716.
 //
-// Uses the same 74HCT4094D chip but with a different bit layout:
-//   QP0 = EP_LE      QP4 = EP_STV
-//   QP1 = PWR_DIS    QP5 = SCAN_DIR
-//   QP2 = POS_PWR    QP6 = EP_MODE
-//   QP3 = NEG_PWR    QP7 = EP_OE
+//   QP0 = EP_LE    QP1 = PWR_DIS   QP2 = POS_PWR   QP3 = NEG_PWR
+//   QP4 = EP_STV   QP5 = SCAN_DIR  QP6 = EP_MODE   QP7 = EP_OE
 //
-// Power sequence: clear PWR_DIS → enable NEG_PWR → enable POS_PWR
+// Power sequence: clear PWR_DIS → NEG_PWR → POS_PWR
 // (mirrors the epd_poweron() sequence in the upstream epdiy/EPD47 driver).
 // =============================================================================
-class EPD_H716PowerDriver : public EPD_PowerDriver, public EPD_ISRController {
+class EPD_H716PowerDriver : public EPD_PowerDriver {
 public:
   bool begin(const EPD_Painter::Shift& shift);
-
   bool powerOn() override;
   void powerOff() override;
-
-  void IRAM_ATTR sr_set_bit(uint8_t index, bool val) override;
+  EPD_ISRController* isrController() override { return &_sr_hw; }
 
 private:
-  struct H716State {
-    bool ep_latch_enable  = false; // QP0
-    bool power_disable    = true;  // QP1 (active-high disable; starts true)
-    bool pos_power_enable = false; // QP2
-    bool neg_power_enable = false; // QP3
-    bool ep_stv           = false; // QP4
-    bool ep_scan_direction = true; // QP5 (starts true)
-    bool ep_mode          = false; // QP6
-    bool ep_output_enable = false; // QP7
-  } _sr;
+  EPD_ShiftReg _sr_hw;
 
-  int _data;
-  int _clk;
-  int _str;
-  int _le_time;
-
-  void IRAM_ATTR sr_push_bits();
+  // Named pins for power sequencing — all route through _sr_hw
+  EPD_SRPin _pin_le       {&_sr_hw, 0};  // QP0 -> EP_LE
+  EPD_SRPin _pin_pwr_dis  {&_sr_hw, 1};  // QP1 -> PWR_DIS (active-high)
+  EPD_SRPin _pin_pos_pwr  {&_sr_hw, 2};  // QP2 -> POS_PWR
+  EPD_SRPin _pin_neg_pwr  {&_sr_hw, 3};  // QP3 -> NEG_PWR
+  EPD_SRPin _pin_stv      {&_sr_hw, 4};  // QP4 -> EP_STV
+  EPD_SRPin _pin_scan_dir {&_sr_hw, 5};  // QP5 -> SCAN_DIR
+  EPD_SRPin _pin_mode     {&_sr_hw, 6};  // QP6 -> EP_MODE
+  EPD_SRPin _pin_oe       {&_sr_hw, 7};  // QP7 -> EP_OE
 };

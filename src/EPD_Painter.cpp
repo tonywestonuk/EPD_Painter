@@ -328,14 +328,13 @@ bool EPD_Painter::begin() {
     if (_config.shift.driver == Shift::H716) {
       auto* h716 = new EPD_H716PowerDriver();
       h716->begin(_config.shift);
-      _shiftReg    = h716;
       _powerDriver = h716;
     } else {
       auto* h752 = new epd_painter_powerctl_74HCT4094D();
       h752->begin(_config);
-      _shiftReg    = h752;
       _powerDriver = h752;
     }
+    _shiftReg = _powerDriver->isrController();
   } else {
     _powerDriver = new EPD_GpioPowerDriver(_config.pin_oe, _config.pin_pwr);
   }
@@ -346,9 +345,9 @@ bool EPD_Painter::begin() {
     return new EPD_GpioPin(uint8_t(p));
   };
   _pin_spv = make_pin(_config.pin_spv);
-  _pin_ckv = new EPD_GpioPin(uint8_t(_config.pin_ckv));
+  _pin_ckv = make_pin(uint8_t(_config.pin_ckv));
   _pin_le  = make_pin(_config.pin_le);
-  _pin_sph = new EPD_GpioPin(uint8_t(_config.pin_sph));
+  _pin_sph = make_pin(uint8_t(_config.pin_sph));
 
   if (!(dma_buffer && packed_fastbuffer && packed_screenbuffer)) return false;
 

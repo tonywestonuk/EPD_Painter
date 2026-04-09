@@ -390,4 +390,243 @@ epd_painter_ink:
 
     mov             a2, a11
     retw.n
+// =============================================================================
+// epd_sr_push_fast
+//
+// Clocks one byte MSB-first into a 74HCT4094D shift register using
+// EE.WR_MASK_GPIO_OUT — atomic masked fast-GPIO writes.
+//
+// Timing: one NOP (≈4 ns at 240 MHz) between each GPIO transition is the
+// empirically determined minimum — 0 NOPs fails.  The fast-GPIO interface
+// bypasses the AHB bus, so the chip runs well beyond its 20 ns datasheet
+// spec.  If reliability issues appear, add a second NOP after each CLK edge.
+//
+// Parameters:
+//   a2 — byte to clock out
+//   a3 — pointer to EPD_SRMasks:
+//          [+0]  data_mask      (uint32_t)  DATA pin bitmask
+//          [+4]  clk_mask       (uint32_t)  CLK pin bitmask
+//          [+8]  str_mask       (uint32_t)  STR pin bitmask
+//          [+12] clkdata_mask   (uint32_t)  CLK | DATA bitmask
+//
+// AR register assignments (held for the duration of the function):
+//   a4 — data_mask    (value AND mask for DATA-only writes)
+//   a5 — clk_mask     (value AND mask for CLK-only writes)
+//   a6 — str_mask     (value AND mask for STROBE writes)
+//   a7 — clkdata_mask (mask for combined CLK+DATA writes)
+//   a8 — 0            (value for driving pins low)
+//
+// EE.WR_MASK_GPIO_OUT semantics:
+//   GPIO_OUT = (GPIO_OUT & ~mask) | (value & mask)
+//   Both operands are AR registers.
+// =============================================================================
+    // -----------------------------------------------------------------------
+    // Assembler directives — tell the linker where to place this function.
+    // -----------------------------------------------------------------------
+    .section .iram1,"ax"    // Place in Internal RAM (IRAM), not flash.
+                            // IRAM code runs at full CPU speed with no cache
+                            // miss stalls.  Flash-cached code would add ~100 ns
+                            // of latency on a cold miss — fatal for tight GPIO
+                            // bit-bang timing.
+    .align 4                // Align the function to a 4-byte boundary.
+                            // Xtensa fetches instructions in 4-byte chunks;
+                            // misalignment wastes a fetch cycle on entry.
+    .global epd_sr_push_fast  // Make the symbol visible to the C++ linker so
+                              // the extern "C" declaration in epd_pin_driver.h
+                              // can find it.
+    .type   epd_sr_push_fast, @function  // Mark as a function (vs data) for
+                                         // debug info and stack unwinding.
+
+epd_sr_push_fast:           // Function entry point label.
+
+    // -----------------------------------------------------------------------
+    // Xtensa uses a WINDOWED register file.  'entry' rotates the register
+    // window and allocates stack space.
+    //
+    //   entry a1, 32
+    //         ^^  ^^
+    //         |   └─ Reserve 32 bytes of stack space (enough for a2-a15 spill
+    //         |      if a deeper call needs them, though we make no calls here).
+    //         └─ a1 is the stack pointer — entry adjusts it by -32.
+    //
+    // After 'entry', the CALLER's a2 and a3 are visible to us as our a2/a3.
+    // Xtensa's calling convention passes the first two arguments in a2/a3:
+    //   a2 = byte to clock out  (uint8_t, zero-extended to 32 bits)
+    //   a3 = pointer to EPD_SRMasks struct
+    // -----------------------------------------------------------------------
+    entry   a1, 32
+
+    // -----------------------------------------------------------------------
+    // Load the four mask values from the EPD_SRMasks struct into registers.
+    // We keep them in registers for the whole function to avoid re-loading
+    // from memory on every bit.
+    //
+    //   l32i  dst, base, byte_offset
+    //         ^^^  ^^^^  ^^^^^^^^^^^
+    //         |    |     └─ Byte offset into the struct (0, 4, 8, 12)
+    //         |    └─ Base address register (a3 = &_masks)
+    //         └─ Destination register
+    //
+    // The struct layout matches EPD_SRMasks exactly:
+    //   offset  0 → data_mask    = (1 << 0) = 0x01
+    //   offset  4 → clk_mask     = (1 << 1) = 0x02
+    //   offset  8 → str_mask     = (1 << 2) = 0x04
+    //   offset 12 → clkdata_mask = (1 << 0)|(1 << 1) = 0x03
+    //
+    // These are fast-GPIO PORT BIT MASKS, not physical GPIO pin numbers.
+    // Physical pins were routed to fast-GPIO bits 0/1/2 via the GPIO Matrix
+    // in EPD_ShiftReg::_reconfigure_fast_gpio().
+    // -----------------------------------------------------------------------
+    l32i    a4, a3, 0    // a4 = data_mask    (bit 0 of the fast-GPIO port = DATA pin)
+    l32i    a5, a3, 4    // a5 = clk_mask     (bit 1 of the fast-GPIO port = CLK pin)
+    l32i    a6, a3, 8    // a6 = str_mask     (bit 2 of the fast-GPIO port = STR pin)
+    l32i    a7, a3, 12   // a7 = clkdata_mask (bits 0+1 — used to touch both DATA and CLK atomically)
+    movi    a8, 0        // a8 = 0            (constant zero — used to CLEAR pins)
+
+    // -----------------------------------------------------------------------
+    // Pull STROBE low before we start shifting.
+    // The 74HCT4094D latches its shift register to the parallel outputs on a
+    // RISING STROBE edge.  Holding STR low during shifting prevents any
+    // partial byte from being latched mid-transfer.
+    //
+    //   ee.wr_mask_gpio_out  value_reg, mask_reg
+    //
+    // Effect: fast_gpio_port = (fast_gpio_port & ~mask) | (value & mask)
+    //   mask  = a6 = str_mask = 0x04  → only the STR bit is affected
+    //   value = a8 = 0               → STR bit is driven to 0
+    // -----------------------------------------------------------------------
+    ee.wr_mask_gpio_out  a8, a6     // STR = 0
+
+    // -----------------------------------------------------------------------
+    // Clock out 8 bits, MSB (bit 7) first.
+    //
+    // The 74HCT4094D samples its DS (data serial) input on the RISING edge
+    // of CP (clock).  So for each bit we:
+    //   1. Set DATA to the bit value while keeping CLK low.
+    //   2. Pulse CLK high then low.
+    //
+    // Each bit follows this structure:
+    //
+    //   bbci  a2, N, .bN_lo        — "Branch if Bit Clear Immediate"
+    //                                 Tests bit N of register a2 (our byte).
+    //                                 If the bit is 0, jump to .bN_lo.
+    //                                 If the bit is 1, fall through.
+    //
+    //   [bit=1 path]
+    //   ee.wr_mask_gpio_out a4, a7  — value=data_mask, mask=clkdata_mask
+    //                                 Sets DATA=1, forces CLK=0 atomically.
+    //   j .bN_clk                   — Unconditional jump, skip the bit=0 path.
+    //
+    //   [bit=0 path]
+    //   .bN_lo:
+    //   ee.wr_mask_gpio_out a8, a7  — value=0, mask=clkdata_mask
+    //                                 Clears DATA=0 and CLK=0 atomically.
+    //
+    //   [both paths converge here]
+    //   .bN_clk:
+    //   nop                         — One pipeline bubble (~4 ns) to meet the
+    //                                 74HCT4094D's DATA setup time before CLK↑.
+    //   ee.wr_mask_gpio_out a5, a5  — value=clk_mask, mask=clk_mask
+    //                                 CLK = 1  (rising edge — chip samples DATA here)
+    //   nop                         — One bubble (~4 ns) to meet CLK high pulse width.
+    //                                 The NEXT bit's DATA write will bring CLK back low.
+    // -----------------------------------------------------------------------
+
+    // --- Bit 7 (MSB) ---
+    bbci    a2, 7, .b7_lo           // if bit 7 of byte == 0, jump to .b7_lo
+    ee.wr_mask_gpio_out  a4, a7     // bit=1: DATA=1, CLK=0
+    j       .b7_clk                 // skip the bit=0 path
+.b7_lo:
+    ee.wr_mask_gpio_out  a8, a7     // bit=0: DATA=0, CLK=0
+.b7_clk:
+    nop                             // DATA setup hold before CLK rises
+    ee.wr_mask_gpio_out  a5, a5     // CLK=1  ← chip latches DATA on this edge
+
+    // --- Bit 6 ---
+    bbci    a2, 6, .b6_lo
+    ee.wr_mask_gpio_out  a4, a7     // bit=1: DATA=1, CLK=0
+    j       .b6_clk
+.b6_lo:
+    ee.wr_mask_gpio_out  a8, a7     // bit=0: DATA=0, CLK=0
+.b6_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5     // CLK=1
+
+    // --- Bit 5 ---
+    bbci    a2, 5, .b5_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b5_clk
+.b5_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b5_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // --- Bit 4 ---
+    bbci    a2, 4, .b4_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b4_clk
+.b4_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b4_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // --- Bit 3 ---
+    bbci    a2, 3, .b3_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b3_clk
+.b3_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b3_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // --- Bit 2 ---
+    bbci    a2, 2, .b2_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b2_clk
+.b2_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b2_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // --- Bit 1 ---
+    bbci    a2, 1, .b1_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b1_clk
+.b1_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b1_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // --- Bit 0 (LSB) ---
+    bbci    a2, 0, .b0_lo
+    ee.wr_mask_gpio_out  a4, a7
+    j       .b0_clk
+.b0_lo:
+    ee.wr_mask_gpio_out  a8, a7
+.b0_clk:
+    nop
+    ee.wr_mask_gpio_out  a5, a5
+
+    // -----------------------------------------------------------------------
+    // All 8 bits have been clocked in.  Bring CLK low (it was left high after
+    // the last bit's CLK=1), then pulse STROBE high to latch the shift
+    // register contents into the 74HCT4094D's parallel output register.
+    // The parallel outputs (QP1-QP8) update on the rising STROBE edge.
+    // -----------------------------------------------------------------------
+    ee.wr_mask_gpio_out  a8, a5     // CLK=0  (idle state between transfers)
+    nop                             // CLK low hold time before STR rises
+    ee.wr_mask_gpio_out  a6, a6     // STR=1  ← parallel outputs update here
+
+    // -----------------------------------------------------------------------
+    // Return to caller.  'retw.n' is the compact (2-byte) windowed return:
+    // it restores the register window that 'entry' rotated on the way in,
+    // making the caller's registers visible again.
+    // -----------------------------------------------------------------------
+    retw.n
+
 #endif
