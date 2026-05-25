@@ -197,7 +197,6 @@ bool EPD_Painter::begin() {
   // I2C not used in ESP-IDF builds
 #endif
 
-
   // ---- Configure EPD control pins ----
   // Pins managed by powerctl (PCA9555) or encoded as EPD_SR_PIN() (shift register)
   // are skipped here — their hardware is initialised elsewhere.
@@ -304,8 +303,17 @@ bool EPD_Painter::begin() {
   // ---- Allocate packed 2bpp framebuffers ----
   const size_t packed_size = (_config.width * _config.height) / 4;
 
+  // Prefer internal RAM for speed, fall back to PSRAM if the contiguous
+  // internal-heap block isn't available (e.g. after WiFi has been brought
+  // up first — leaves the heap fragmented).  PSRAM-backed fastbuffer is
+  // slower for the per-pixel ops in epd_painter_ink() but boots cleanly.
   packed_fastbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
+  if (!packed_fastbuffer) {
+    log_w("[EPD] packed_fastbuffer: internal alloc failed, retrying in PSRAM");
+    packed_fastbuffer = static_cast<uint8_t *>(
+      heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+  }
 
   packed_screenbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));

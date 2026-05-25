@@ -74,7 +74,7 @@ bool epd_painter_powerctl::powerOn() {
   if (!tpsWrite(TPS_UPSEQ1, 0xAA)) return false;
   if (!tpsWrite(TPS_ENABLE, 0x3F)) return false;
 
-  // Dont set vcomm... this chip should already konow it. 
+  // Dont set vcomm... this chip should already konow it.
   //setVcomMv(config.power.vcom_mv);
 
   uint8_t v1 = 0, v2 = 0;
@@ -104,6 +104,13 @@ bool epd_painter_powerctl::powerOn() {
 
 void epd_painter_powerctl::powerOff() {
   printf("[PWRCTL] Power-off... \n");
+
+  // Disable the TPS65185 rails (VPOS/VNEG/VGH/VGL/VCOM) first.  Without
+  // this the rails stay hot even though the PCA9555 controls go low,
+  // which lets charge bleed through the panel and pulls pixels darker
+  // over time — newly visible once WiFi started running alongside the
+  // display.  Pairs with TPS_ENABLE=0x3F set in powerOn().
+  tpsWrite(TPS_ENABLE, 0x00);
 
   pcaWrite(PIN_OE, false);
   pcaWrite(PIN_MODE, false);
