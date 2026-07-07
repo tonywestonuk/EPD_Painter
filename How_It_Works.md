@@ -394,6 +394,32 @@ channel and points it at the correct descriptor before each transfer, ensuring
 the DMA always starts from byte 0 of the intended buffer. This avoids any
 synchronisation issues between the DMA engine and the LCD_CAM peripheral.
 
+### Row-End Padding — Flushing the Source-Driver Shift Chain
+
+The panel's source driver is a shift-register chain running along the top edge
+of the glass: each CL pulse shifts 4 pixels (one byte) further along, and LE
+latches the whole chain onto the column outputs at the end of the row.
+
+The chain has slightly **more stages than visible columns** (dummy cells,
+cascade margin between driver chips). Clocking in exactly `width` pixels and
+latching leaves the data about one 32-bit word short of its final position at
+the far end of the chain — so the last ~16 columns latch data belonging to
+pixels ~16px to their left, and the image visibly repeats at the right-hand
+edge. This is a property of the glass, not the MCU: independent drivers (e.g.
+FastEPD) show the same artifact when they clock exactly `width` pixels.
+
+The fix: every row's DMA transfer carries `Config::row_pad_bytes` (default 4)
+trailing zero bytes, and `lcd_dout_cyclelen` is extended to match, giving the
+chain 16 extra clocks to carry the real pixels to the end before LE latches.
+Zero bytes are neutral drive, so the pad is electrically harmless, and it
+costs only ~50ns per row at 80 MHz PCLK.
+
+Diagnostics that pinpointed this (July 2026, M5PaperS3): GDMA underflow flags
+stayed clear across full paints (ruling out DMA starvation), and a 3px-pitch
+vertical grating showed the affected band's lines doubled at +1px phase — a
+byte-multiple displacement, i.e. pixels arriving short in the shift chain.
+`examples/adafruit/diagonal_lines` is the test pattern for this artifact.
+
 ---
 
 ## 8. sendRow() — The Row Timing Protocol

@@ -72,7 +72,8 @@ struct PowerCtlConfig {
 
   enum class Rotation {
     ROTATION_0,   // landscape — normal orientation
-    ROTATION_CW   // 90° clockwise — portrait drawing canvas (width↔height swapped)
+    ROTATION_CW,  // 90° clockwise — portrait drawing canvas (width↔height swapped)
+    ROTATION_180  // landscape, flipped — same dims as ROTATION_0, image reversed at pack
   };
 
   struct Waveforms {
@@ -106,6 +107,13 @@ struct PowerCtlConfig {
       int16_t pin_le;
       Quality  quality;
       Rotation rotation = Rotation::ROTATION_0;
+
+      // Dummy zero bytes clocked out after each row's pixel data (4 bytes =
+      // 16 pixel clocks). The panel's source-driver shift chain is slightly
+      // longer than the visible width; without this flush the last ~16
+      // columns latch data belonging to pixels further left, repeating the
+      // image at the right-hand edge. See How_It_Works.md §7.
+      uint8_t row_pad_bytes = 4;
       int8_t data_pins[8];
       I2CBusConfig i2c{};
       PowerCtlConfig power{};

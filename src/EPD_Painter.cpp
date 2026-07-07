@@ -94,6 +94,29 @@ static IRAM_ATTR void compact_pixels_rotated_cw(
 
 }
 
+// =============================================================================
+// compact_pixels_180
+//
+// 180° rotation + 8bpp→2bpp compaction for a landscape (ROTATION_0) buffer.
+// A 180° turn of a row-major image is just a full reversal of the pixel order
+// (pixel (x,y) → (W-1-x, H-1-y) == linear index i → N-1-i).  So we read the
+// source backwards in groups of 4 and pack forward, using the same MSB-first
+// nibble layout as the linear pack — keeping panel coordinates correct.
+//
+// size must be a multiple of 4.
+// =============================================================================
+static IRAM_ATTR void compact_pixels_180(
+    const uint8_t* src, uint8_t* dst, uint32_t size)
+{
+    const uint32_t nbytes = size / 4;
+    const uint8_t* s = src + size - 1;        // last source pixel
+    for (uint32_t b = 0; b < nbytes; b++) {
+        dst[b] = ((s[ 0] & 3) << 6) | ((s[-1] & 3) << 4)
+               | ((s[-2] & 3) << 2) |  (s[-3] & 3);
+        s -= 4;
+    }
+}
+
 extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
   const uint8_t *waveform, uint32_t chunk_flags);
@@ -145,6 +168,20 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     dma_buffer = dma_buffer1;
   }
 
+  // Reset the AFIFO while the bus is idle, then start GDMA *before* the
+  // CKV/LE pin sequence below, so the DMA has time to fetch the descriptor
+  // and prime the LCD AFIFO before lcd_start (esp-idf's i80 driver inserts
+  // a delay here for the same reason).  The pin sequence takes ≥1us, so it
+  // doubles as the prefill window at zero added row time.
+  //
+  // Note: the right-edge "image repeated ~16px apart" artifact once blamed
+  // on this prefill race was actually the panel's source-driver shift chain
+  // needing extra flush clocks — fixed by Config::row_pad_bytes (see
+  // How_It_Works.md §7).  GDMA underflow flags confirmed the FIFO never
+  // starved with this ordering.
+  LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
+  gdma_start(dma_chan, (intptr_t)desc);
+
   if (firstLine) {
     _pin_spv->set(false);
     _pin_ckv->set(false);
@@ -158,12 +195,6 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     EPD_DELAY_US(1);
     _pin_ckv->set(true);
   }
-
-  // Reset ownership, flush AFIFO, and restart GDMA from the correct descriptor.
-  // This prevents free-running DMA from preloading the next buffer into the AFIFO
-  // before the CPU has written new row data there (which caused left-side artifacts).
-  LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
-  gdma_start(dma_chan, (intptr_t)desc);
 
   LCD_CAM.lcd_user.lcd_start = 1;
   if (lastLine) {
@@ -211,6 +242,14 @@ bool EPD_Painter::begin() {
 
   packed_row_bytes = _config.width / 4;
 
+  // Each row is sent with row_pad_bytes of trailing zeros: the panel's
+  // source-driver shift chain has more stages than visible columns, so the
+  // real pixel data needs extra CL clocks to reach the far (right-hand) end
+  // before LE latches. Without the pad the last ~16 columns repeat content
+  // from further left. Zero bytes are neutral drive — electrically harmless —
+  // and cost ~50ns per row. See How_It_Works.md §7.
+  const int dma_row_bytes = packed_row_bytes + _config.row_pad_bytes;
+
   // ---- Enable and reset LCD_CAM peripheral ----
   periph_module_enable(PERIPH_LCD_CAM_MODULE);
   periph_module_reset(PERIPH_LCD_CAM_MODULE);
@@ -240,7 +279,7 @@ bool EPD_Painter::begin() {
   LCD_CAM.lcd_user.lcd_dummy = 0;
   LCD_CAM.lcd_user.lcd_dummy_cyclelen = 0;
   LCD_CAM.lcd_user.lcd_cmd = 0;
-  LCD_CAM.lcd_user.lcd_dout_cyclelen = packed_row_bytes - 1;
+  LCD_CAM.lcd_user.lcd_dout_cyclelen = dma_row_bytes - 1;
   LCD_CAM.lcd_user.lcd_dout = 1;
   LCD_CAM.lcd_user.lcd_update = 1;
 
@@ -281,22 +320,27 @@ bool EPD_Painter::begin() {
 
   // ---- Allocate DMA row buffers ----
   dma_buffer1 = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_row_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    heap_caps_aligned_alloc(16, dma_row_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   dma_buffer2 = static_cast<uint8_t *>(
-    heap_caps_aligned_alloc(16, packed_row_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    heap_caps_aligned_alloc(16, dma_row_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+
+  // Zero both buffers once so the pad region stays neutral forever —
+  // pixel converts only ever write the first packed_row_bytes.
+  memset(dma_buffer1, 0x00, dma_row_bytes);
+  memset(dma_buffer2, 0x00, dma_row_bytes);
 
   dma_buffer = dma_buffer1;
 
   // ---- Set up DMA descriptors (one per buffer, stopped after each row) ----
   dma_desc2.dw0.suc_eof = 1;
-  dma_desc2.dw0.size = packed_row_bytes;
-  dma_desc2.dw0.length = packed_row_bytes;
+  dma_desc2.dw0.size = dma_row_bytes;
+  dma_desc2.dw0.length = dma_row_bytes;
   dma_desc2.buffer = const_cast<uint8_t *>(dma_buffer2);
   dma_desc2.next = nullptr;
 
   dma_desc1.dw0.suc_eof = 1;
-  dma_desc1.dw0.size = packed_row_bytes;
-  dma_desc1.dw0.length = packed_row_bytes;
+  dma_desc1.dw0.size = dma_row_bytes;
+  dma_desc1.dw0.length = dma_row_bytes;
   dma_desc1.buffer = const_cast<uint8_t *>(dma_buffer1);
   dma_desc1.next = nullptr;
 
@@ -432,6 +476,8 @@ void EPD_Painter::paint(uint8_t *framebuffer) {
 #endif
   if (_config.rotation == Rotation::ROTATION_CW)
     compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
+  else if (_config.rotation == Rotation::ROTATION_180)
+    compact_pixels_180(framebuffer, packed_paintbuffer, _config.width * _config.height);
   else
     epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
 #ifdef EPD_ASM_TIMING
@@ -488,6 +534,8 @@ void EPD_Painter::paintLater(uint8_t *framebuffer) {
 #endif
     if (_config.rotation == Rotation::ROTATION_CW)
       compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
+    else if (_config.rotation == Rotation::ROTATION_180)
+      compact_pixels_180(framebuffer, packed_paintbuffer, _config.width * _config.height);
     else
       epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
 #ifdef EPD_ASM_TIMING
@@ -590,7 +638,7 @@ void EPD_Painter::_paint_task_body() {
      if (_config.quality == Quality::QUALITY_HIGH) {
         EPD_DELAY_MS(8);
       } else if (_config.quality == Quality::QUALITY_NORMAL) {
-        EPD_DELAY_MS(2);
+        EPD_DELAY_MS(4);
       }
     }
 #ifdef EPD_ASM_TIMING
@@ -719,6 +767,8 @@ void EPD_Painter::clearDirtyAreas(uint8_t* framebuffer, int tolerance, ClearMode
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
     if (_config.rotation == Rotation::ROTATION_CW)
         compact_pixels_rotated_cw(framebuffer, packed_paintbuffer, _config.height, _config.width);
+    else if (_config.rotation == Rotation::ROTATION_180)
+        compact_pixels_180(framebuffer, packed_paintbuffer, _config.width * _config.height);
     else
         epd_painter_compact_pixels(framebuffer, packed_paintbuffer, _config.width * _config.height);
     xSemaphoreGive(_paint_buffer_sem);
@@ -960,6 +1010,8 @@ uint8_t* EPD_Painter::packBuffer(const uint8_t* fb) const {
     if (!buf) return nullptr;
     if (_config.rotation == Rotation::ROTATION_CW)
         compact_pixels_rotated_cw(fb, buf, _config.height, _config.width);
+    else if (_config.rotation == Rotation::ROTATION_180)
+        compact_pixels_180(fb, buf, (uint32_t)_config.width * _config.height);
     else
         epd_painter_compact_pixels(fb, buf, (uint32_t)_config.width * _config.height);
     return buf;
