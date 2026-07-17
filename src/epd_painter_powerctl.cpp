@@ -17,6 +17,7 @@ epd_painter_powerctl::epd_painter_powerctl() {
 bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
 
   config = cfg;
+  if (!_mtx) _mtx = xSemaphoreCreateMutex();
 
   // I2C not used in ESP-IDF builds
 
@@ -42,6 +43,13 @@ bool epd_painter_powerctl::begin(EPD_Painter::Config cfg) {
 }
 
 bool epd_painter_powerctl::powerOn() {
+  if (_mtx) xSemaphoreTake(_mtx, portMAX_DELAY);
+  bool ok = powerOnLocked();
+  if (_mtx) xSemaphoreGive(_mtx);
+  return ok;
+}
+
+bool epd_painter_powerctl::powerOnLocked() {
   printf("[PWRCTL] Power-on sequence... \n");
 
   if (!pcaWrite(PIN_OE, true))     return false;
@@ -103,6 +111,7 @@ bool epd_painter_powerctl::powerOn() {
 }
 
 void epd_painter_powerctl::powerOff() {
+  if (_mtx) xSemaphoreTake(_mtx, portMAX_DELAY);
   printf("[PWRCTL] Power-off... \n");
 
   // Disable the TPS65185 rails (VPOS/VNEG/VGH/VGL/VCOM) first.  Without
@@ -118,6 +127,7 @@ void epd_painter_powerctl::powerOff() {
   pcaWrite(PIN_VCOM, false);
   EPD_DELAY_MS(1);
   pcaWrite(PIN_WAKEUP, false);
+  if (_mtx) xSemaphoreGive(_mtx);
 }
 
 bool epd_painter_powerctl::isPwrGood() {
@@ -130,6 +140,40 @@ uint8_t epd_painter_powerctl::readTpsPg() {
   uint8_t val = 0;
   tpsRead(TPS_PG, val);
   return val;
+}
+
+int epd_painter_powerctl::readTemperatureC() {
+  if (_mtx) xSemaphoreTake(_mtx, portMAX_DELAY);
+  int r = readTemperatureCLocked();
+  if (_mtx) xSemaphoreGive(_mtx);
+  return r;
+}
+
+int epd_painter_powerctl::readTemperatureCLocked() {
+  // The TPS65185 only answers I2C in STANDBY/ACTIVE (WAKEUP high). If it is
+  // asleep, raise WAKEUP for the read and drop it again afterwards.
+  bool wasAwake = (_pca_out[1] >> (PIN_WAKEUP - 8)) & 0x01;
+  if (!wasAwake) {
+    if (!pcaWrite(PIN_WAKEUP, true)) return TEMP_UNAVAILABLE;
+    EPD_DELAY_MS(4);  // datasheet: I2C ready ~1.8ms after WAKEUP
+  }
+
+  int result = TEMP_UNAVAILABLE;
+  uint8_t t1 = 0;
+  if (tpsRead(TPS_TMST1, t1) && tpsWrite(TPS_TMST1, t1 | 0x80)) {  // READ_THERM
+    for (int i = 0; i < 50; ++i) {
+      if (!tpsRead(TPS_TMST1, t1)) break;
+      if (t1 & 0x20) {  // CONV_END
+        uint8_t v = 0;
+        if (tpsRead(TPS_TMST_VALUE, v)) result = (int8_t)v;
+        break;
+      }
+      EPD_DELAY_MS(1);
+    }
+  }
+
+  if (!wasAwake) pcaWrite(PIN_WAKEUP, false);
+  return result;
 }
 
 uint8_t epd_painter_powerctl::readPcaPort(uint8_t port) {
@@ -158,7 +202,10 @@ bool epd_painter_powerctl::pcaWriteReg(uint8_t reg, uint8_t val) {
   config.i2c.wire->beginTransmission(config.power.pca_addr);
   config.i2c.wire->write(reg);
   config.i2c.wire->write(val);
-  return (config.i2c.wire->endTransmission() == 0);
+  uint8_t err = config.i2c.wire->endTransmission();
+  if (err) printf("[PWRCTL] pcaWriteReg(0x%02X)=I2C err %d (task %s core %d)\n",
+                  reg, err, pcTaskGetName(nullptr), xPortGetCoreID());
+  return (err == 0);
 #else
   return false;  // I2C not used in ESP-IDF builds
 #endif

@@ -121,8 +121,12 @@ private:
 // =============================================================================
 class EPD_PowerDriver {
 public:
+    // Returned by readTemperatureC() when the board has no panel temp sensor.
+    static constexpr int TEMP_UNAVAILABLE = -1000;
+
     virtual bool powerOn() = 0;
     virtual void powerOff() = 0;
     virtual EPD_ISRController* isrController() { return nullptr; }
+    virtual int readTemperatureC() { return TEMP_UNAVAILABLE; }
     virtual ~EPD_PowerDriver() = default;
 };

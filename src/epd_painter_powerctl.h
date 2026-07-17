@@ -20,10 +20,21 @@ public:
   uint8_t readTpsPg();
   uint8_t readPcaPort(uint8_t port);
 
+  // Panel temperature in °C from the TPS65185's thermistor ADC (the sensor
+  // sits against the panel, so this is the number waveform selection wants).
+  // Wakes the TPS if it is asleep and restores the previous state after.
+  int readTemperatureC() override;
+
   void setVcomMv(int vcom_mv);
 
 private:
   EPD_Painter::Config config;
+
+  // Serializes powerOn/powerOff/readTemperatureC. The paint task powers the
+  // panel on from its own core while the application task may concurrently
+  // read the temperature; unserialized, the temp read can put the TPS back
+  // to sleep mid-power-on and the rails never come up.
+  SemaphoreHandle_t _mtx = nullptr;
 
   // ---- PCA9535 cached state ----
   uint8_t _pca_out[2];
@@ -43,12 +54,18 @@ private:
   static constexpr uint8_t PCA_INPUT  = 1;
 
   // ---- TPS65185 registers ----
+  static constexpr uint8_t TPS_TMST_VALUE = 0x00;  // thermistor °C, two's complement
   static constexpr uint8_t TPS_ENABLE = 0x01;
   static constexpr uint8_t TPS_VCOM1  = 0x03;
   static constexpr uint8_t TPS_VCOM2  = 0x04;
   static constexpr uint8_t TPS_UPSEQ0 = 0x09;
   static constexpr uint8_t TPS_UPSEQ1 = 0x0A;
+  static constexpr uint8_t TPS_TMST1  = 0x0D;      // bit7 READ_THERM, bit5 CONV_END
   static constexpr uint8_t TPS_PG     = 0x0F;
+
+  // ---- Unlocked implementations (call with _mtx held) ----
+  bool powerOnLocked();
+  int readTemperatureCLocked();
 
   // ---- PCA low-level ----
   bool pcaWriteReg(uint8_t reg, uint8_t val);

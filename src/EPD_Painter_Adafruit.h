@@ -97,6 +97,8 @@ public:
     // -------------------------------------------------------------------------
     void setQuality(EPD_Painter::Quality q) { _painter.setQuality(q); }
 
+    int readPanelTemperatureC() { return _painter.readPanelTemperatureC(); }
+
     const EPD_Painter::Config& getConfig() { return _painter.getConfig(); }
     const EPD_Painter::Config* getPreset() const { return _painter.getPreset(); }
 

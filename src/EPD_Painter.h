@@ -85,6 +85,15 @@ struct PowerCtlConfig {
       uint8_t high_darker[3][13];
   };
 
+  // Optional temperature-compensated waveform set: used when the panel
+  // temperature (from the power PMIC's sensor) is below `below_c`. Cold ink
+  // is more viscous and needs stronger drive to reach the same grey levels.
+  struct WaveformBand {
+      int8_t below_c;
+      Waveforms waveforms;
+  };
+  static constexpr int MAX_WAVEFORM_BANDS = 3;
+
   struct Shift {
     int8_t data    = -1;
     int8_t clk     = -1;
@@ -118,6 +127,14 @@ struct PowerCtlConfig {
       I2CBusConfig i2c{};
       PowerCtlConfig power{};
       Waveforms waveforms;
+
+      // Cold-temperature waveform bands, sorted ascending by below_c. At each
+      // panel power-on the panel temperature picks the first band whose
+      // below_c exceeds it; if none match (or no temp sensor), the default
+      // `waveforms` table is used.
+      WaveformBand waveform_bands[MAX_WAVEFORM_BANDS];
+      uint8_t num_waveform_bands = 0;
+
       Shift shift;
 
       // Returns a copy of this config with rotation set — lets you write:
@@ -173,6 +190,11 @@ struct PowerCtlConfig {
 
   void setQuality(Quality quality);
 
+  // Panel temperature in °C from the power PMIC's sensor (TPS65185 boards).
+  // Returns EPD_PowerDriver::TEMP_UNAVAILABLE (-1000) if the board has no
+  // sensor or begin() has not run yet.
+  int readPanelTemperatureC();
+
   // Dither an 8bpp framebuffer (0=black … 255=white) in-place to the driver's
   // 4-level encoding: 0=white, 1=lt grey, 2=dk grey, 3=black.
   // Uses Floyd-Steinberg error diffusion. Allocates one row of int16 scratch
@@ -227,6 +249,11 @@ private:
   bool _autoShutdown = true;
   EPD_PainterShutdown* _shutdown = nullptr;
 
+
+  // Waveform table in use — &_config.waveforms or a matched temperature
+  // band's table; re-selected at every panel power-on.
+  const Waveforms* _active_wf = nullptr;
+  void selectWaveformsForTemperature();
 
   // ---- Hardware drivers (created in begin()) ----
   EPD_PowerDriver*   _powerDriver = nullptr;
