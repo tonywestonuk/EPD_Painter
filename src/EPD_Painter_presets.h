@@ -126,16 +126,17 @@
             .fast_darker    = { { 1, 1, 3, 3, 1, 3, 1 },
                                 { 1, 3, 1, 1, 1, 1, 3 },
                                 { 1, 1, 1, 1, 1, 1, 1 } },
-            // NORMAL tables: original hand-tuned values (plus the row-1 DC
-            // balance fix). An even-L* recalibration (2026-07-18) proved too
-            // dark against dithered-reference patches and was reverted;
-            // pending a dither-match tune like the M5PaperS3's (see that
-            // preset and extras/calibration).
+            // NORMAL tables dither-match calibrated (extras/calibration,
+            // 2026-07-18): each driven grey matches a 66%/33% black-dot
+            // dither of the panel's own black+white to within ~1 scanner
+            // grey level — linear-reflectance spacing, dither()-safe. The
+            // original hand-tuned rows were already near-perfect; dark grey
+            // needed one darkening step (plus the row-1 DC balance fix).
             .normal_lighter = { { 1, 1, 1, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2 },
-                                { 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3 },
+                                { 3, 2, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3 },
                                 { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
             .normal_darker  = { { 1, 2, 1, 1, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
-                                { 1, 1, 1, 2, 2, 3, 1, 1, 3, 1, 3, 1, 1 },
+                                { 1, 1, 1, 2, 3, 3, 1, 1, 3, 1, 3, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
             .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
                                 { 1, 1, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },

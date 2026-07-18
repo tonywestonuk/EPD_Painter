@@ -23,8 +23,8 @@
 //                            cross-check; the battery chills with the panel)
 
 // Board under calibration — switch the define to move the rig between boards.
-//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
-#define EPD_PAINTER_PRESET_M5PAPER_S3
+#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+//#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
 #include "EPD_Painter_Adafruit.h"
