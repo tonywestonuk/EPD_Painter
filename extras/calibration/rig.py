@@ -78,15 +78,29 @@ def discover_scanner():
     return m.group(1)
 
 
-def scan(out_path):
-    dev = discover_scanner()
-    print(f"Scanning on {dev} ...")
-    with open(out_path, "wb") as f:
-        subprocess.run(
-            ["scanimage", "-d", dev, "--resolution", str(SCAN_DPI),
-             "--mode", "Gray", "--format=png"],
-            stdout=f, check=True, timeout=300)
-    return out_path
+def scan(out_path, retries=4):
+    """Scan the bed. The MG5200 wedges its BJNP connection every few dozen
+    scans; a ~25s pause and rediscovery usually revives it."""
+    last = None
+    for attempt in range(retries):
+        if attempt:
+            print(f"  scanner not responding, retry {attempt}/{retries - 1} in 25s...")
+            time.sleep(25)
+        try:
+            dev = discover_scanner()
+            print(f"Scanning on {dev} ...")
+            with open(out_path, "wb") as f:
+                subprocess.run(
+                    ["scanimage", "-d", dev, "--resolution", str(SCAN_DPI),
+                     "--mode", "Gray", "--format=png"],
+                    stdout=f, check=True, timeout=300)
+            if os.path.getsize(out_path) > 100_000:   # sane PNG, not a stub
+                return out_path
+            last = f"scan produced only {os.path.getsize(out_path)} bytes"
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, SystemExit) as e:
+            last = e
+    sys.exit(f"Scanner failed after {retries} attempts ({last}) — "
+             "power-cycle it if this persists.")
 
 
 # --------------------------------------------------------- panel locator ----

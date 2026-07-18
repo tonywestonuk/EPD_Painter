@@ -33,14 +33,26 @@ def _flip_last(row, frm, to):
     return False
 
 
+def _flip_first(row, frm, to):
+    for i in range(len(row)):
+        if row[i] == frm:
+            row[i] = to
+            return True
+    return False
+
+
+# Lesson from the T5 sessions: the darker row's TRAILING elements dominate the
+# reached grey, so edit there; the lighter row's compensations must go at the
+# FRONT — a trailing dark pulse in a lighter row leaves ghosting.
+
 def darken_step(nd, nl):
     """One balanced step darker. Mutates copies; returns new (nd, nl) or None."""
     nd, nl = nd[:], nl[:]
     # Darker-row move (B+1), strongest-preference first
     if not (_flip_last(nd, 2, 3) or _flip_last(nd, 3, 1)):
         return None  # darker row already all-dark
-    # Lighter-row compensation (B-1)
-    if not (_flip_last(nl, 1, 3) or _flip_last(nl, 3, 2)):
+    # Lighter-row compensation (B-1), front-loaded
+    if not (_flip_first(nl, 1, 3) or _flip_first(nl, 3, 2)):
         return None
     return nd, nl
 
@@ -49,7 +61,7 @@ def lighten_step(nd, nl):
     nd, nl = nd[:], nl[:]
     if not (_flip_last(nd, 3, 2) or _flip_last(nd, 1, 3)):
         return None
-    if not (_flip_last(nl, 3, 1) or _flip_last(nl, 2, 3)):
+    if not (_flip_first(nl, 3, 1) or _flip_first(nl, 2, 3)):
         return None
     return nd, nl
 
@@ -104,6 +116,7 @@ def main():
 
     transform = None
     history = []
+    prev_errs = {}
     for it in range(1, a.max_iters + 1):
         out, transform, temp = chart_and_measure(s, f"{a.tag}_i{it}", transform)
         lb, lw = out["black"]["lstar"], out["white"]["lstar"]
@@ -115,7 +128,11 @@ def main():
             if abs(err) <= a.tol:
                 continue
             row = GREY_ROW[grey]
-            steps = 1 if abs(err) < 8 else 2 if abs(err) < 20 else 3
+            steps = 1 if abs(err) < 15 else 2 if abs(err) < 25 else 3
+            # Overshoot damping: if the error changed sign since last
+            # iteration we jumped over the target — creep back one step.
+            if grey in prev_errs and prev_errs[grey] * err < 0:
+                steps = 1
             cur_nd, cur_nl = nd[row], nl[row]
             for _ in range(steps):
                 stepped = (darken_step if err > 0 else lighten_step)(cur_nd, cur_nl)
@@ -127,8 +144,9 @@ def main():
                 nd[row], nl[row] = cur_nd, cur_nl
                 edits.append((row, cur_nd, cur_nl))
 
+        prev_errs = errs
         print(f"[iter {it}] T={temp}°C  "
-              + "  ".join(f"{g}: err {e:+.1f}L*" for g, e in errs.items()))
+              + "  ".join(f"{g}: err {e:+.1f}L*" for g, e in errs.items()), flush=True)
         history.append({"iter": it, "temp": temp, "errs": errs,
                         "ND": {r: v[:] for r, v in nd.items()},
                         "NL": {r: v[:] for r, v in nl.items()}})

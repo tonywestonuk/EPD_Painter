@@ -22,7 +22,9 @@
 //   J                     -> BQ27220 fuel-gauge temperature (independent
 //                            cross-check; the battery chills with the panel)
 
-#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+// Board under calibration — switch the define to move the rig between boards.
+//#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
+#define EPD_PAINTER_PRESET_M5PAPER_S3
 
 #include <Arduino.h>
 #include "EPD_Painter_Adafruit.h"
@@ -36,6 +38,34 @@ static const int FID_INSET = 20;
 static const int PATCH_W = 160, PATCH_H = 280, PATCH_Y = 130;
 static const int PATCH_X[4] = { 100, 300, 500, 700 };
 static const uint8_t PATCH_VAL[4] = { 3, 2, 1, 0 };  // black,dk,lt,white L->R
+
+// Match chart: driven greys beside dithered references made of the panel's
+// own black+white pixels (66% and 33% black coverage). If the tone matches,
+// the grey levels are correct for dithering (linear-reflectance spacing).
+// Slot 0 = solid black rail, slot 3 = white rail;
+// slot 1 = [dither66 | driven dark grey], slot 2 = [dither33 | driven light].
+static void drawMatchChart() {
+  epd.fillScreen(0);
+  epd.fillRect(FID_INSET, FID_INSET, FID, FID, 3);
+  epd.fillRect(960 - FID_INSET - FID, FID_INSET, FID, FID, 3);
+  epd.fillRect(FID_INSET, 540 - FID_INSET - FID, FID, FID, 3);
+  epd.fillRect(960 - FID_INSET - FID, 540 - FID_INSET - FID, FID, FID, 3);
+
+  epd.fillRect(PATCH_X[0], PATCH_Y, PATCH_W, PATCH_H, 3);           // black rail
+  epd.fillRect(PATCH_X[3], PATCH_Y, PATCH_W, PATCH_H, 0);           // white rail
+  epd.fillRect(PATCH_X[1] + PATCH_W / 2, PATCH_Y, PATCH_W / 2, PATCH_H, 2);
+  epd.fillRect(PATCH_X[2] + PATCH_W / 2, PATCH_Y, PATCH_W / 2, PATCH_H, 1);
+
+  uint8_t* buf = epd.getBuffer();
+  for (int y = PATCH_Y; y < PATCH_Y + PATCH_H; y++) {
+    for (int x = 0; x < PATCH_W / 2; x++) {
+      // Period-3 diagonal dither: exact 1/3 and 2/3 black coverage
+      bool third = ((x + 2 * y) % 3) == 0;
+      buf[y * 960 + PATCH_X[1] + x] = third ? 0 : 3;  // 66% black
+      buf[y * 960 + PATCH_X[2] + x] = third ? 3 : 0;  // 33% black
+    }
+  }
+}
 
 static void drawChart() {
   epd.fillScreen(0);  // white
@@ -184,6 +214,15 @@ static void handle(char* cmd) {
     setCpuFrequencyMhz(80);   // low idle heat for cold-session accuracy
     Serial.printf("DONE T=%d\n", epd.readPanelTemperatureC());
 
+  } else if (!strcmp(tok[0], "M")) {
+    setCpuFrequencyMhz(240);
+    epd.clear();
+    drawMatchChart();
+    epd.paint();
+    delay(2500);
+    setCpuFrequencyMhz(80);
+    Serial.printf("DONE T=%d\n", epd.readPanelTemperatureC());
+
   } else if (!strcmp(tok[0], "U")) {
     setCpuFrequencyMhz(240);
     epd.fillScreen(0);
@@ -221,7 +260,10 @@ static void handle(char* cmd) {
 
 void setup() {
   Serial.begin(115200);
-  // Auto-shutdown would power-cycle between commands; harmless, keep default.
+  // The M5PaperS3 self-holds power via a latch pin; the library's boot-time
+  // shutdown check can power the board off before we ever get a prompt.
+  // The rig needs the board up unconditionally.
+  epd.setAutoShutdown(false);
   if (!epd.begin()) {
     while (1) { Serial.println("ERR begin failed"); delay(2000); }
   }
