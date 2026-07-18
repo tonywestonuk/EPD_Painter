@@ -56,7 +56,7 @@ def open_serial(port=None):
     return s
 
 
-def command(s, cmd, terminator=("DONE", "OK", "ERR", "TEMP", "READY"), timeout=120):
+def command(s, cmd, terminator=("DONE", "OK", "ERR", "TEMP", "READY", "BQTEMP"), timeout=120):
     s.write((cmd + "\n").encode())
     lines, t0 = [], time.time()
     while time.time() - t0 < timeout:

@@ -120,11 +120,15 @@
             .fast_darker    = { { 1, 1, 3, 3, 1, 3, 1 },
                                 { 1, 3, 1, 1, 1, 1, 3 },
                                 { 1, 1, 1, 1, 1, 1, 1 } },
-            .normal_lighter = { { 1, 1, 1, 1, 2, 2, 3, 2, 2, 2, 2, 2, 2 },
-                                { 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3 },
+            // NORMAL tables calibrated optically (flatbed-scanner rig,
+            // extras/calibration/, 2026-07-18) for even L* grey spacing:
+            // measured black/dk/lt/white = 0/34-38/69-71/100 L* at 20-26°C.
+            // Each darker+lighter row pair is DC balanced (#1s == #2s).
+            .normal_lighter = { { 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 },
+                                { 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 },
                                 { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
-            .normal_darker  = { { 1, 2, 1, 1, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
-                                { 1, 1, 1, 2, 2, 3, 1, 1, 3, 1, 3, 1, 1 },
+            .normal_darker  = { { 1, 3, 1, 1, 1, 3, 1, 2, 2, 1, 1, 1, 1 },
+                                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
             .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
                                 { 1, 1, 3, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2 },

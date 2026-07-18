@@ -176,22 +176,28 @@ static void handle(char* cmd) {
     Serial.println("DONE");
 
   } else if (!strcmp(tok[0], "P")) {
+    setCpuFrequencyMhz(240);  // paint timing must match real-app conditions
     epd.clear();  // hard clear -> known white state
     drawChart();
     epd.paint();
     delay(2500);  // paint() returns before the sweeps finish — let them
+    setCpuFrequencyMhz(80);   // low idle heat for cold-session accuracy
     Serial.printf("DONE T=%d\n", epd.readPanelTemperatureC());
 
   } else if (!strcmp(tok[0], "U")) {
+    setCpuFrequencyMhz(240);
     epd.fillScreen(0);
     epd.paint();
     delay(2500);
+    setCpuFrequencyMhz(80);
     Serial.printf("DONE T=%d\n", epd.readPanelTemperatureC());
 
   } else if (!strcmp(tok[0], "K")) {
+    setCpuFrequencyMhz(240);
     epd.fillScreen(3);
     epd.paint();
     delay(2500);
+    setCpuFrequencyMhz(80);
     Serial.printf("DONE T=%d\n", epd.readPanelTemperatureC());
 
   } else if (!strcmp(tok[0], "C")) {
@@ -221,6 +227,9 @@ void setup() {
   }
   epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
   delay(100);
+  // Idle at 80MHz to minimize self-heating while the chilled board sits on
+  // the scanner (paints temporarily restore 240MHz for authentic timing).
+  setCpuFrequencyMhz(80);
   Serial.printf("READY T=%d\n", epd.readPanelTemperatureC());
 }
 
