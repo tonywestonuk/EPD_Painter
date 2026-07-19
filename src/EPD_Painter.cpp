@@ -801,8 +801,8 @@ void EPD_Painter::_paint_task_body() {
         EPD_DELAY_MS(8);
       } else if (_config.quality == Quality::QUALITY_NORMAL) {
         EPD_DELAY_MS(4);
-      } else{
       }
+      // QUALITY_FAST = No delay.
     }
 #ifdef EPD_ASM_TIMING
     printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
