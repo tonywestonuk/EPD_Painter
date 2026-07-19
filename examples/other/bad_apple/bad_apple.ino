@@ -222,7 +222,22 @@ void setup() {
   start_ms = stat_ms = millis();
 }
 
+static bool paused = false;
+
 void loop() {
+  // ---- serial control: 'p' toggles pause (handy for scanning the panel) ----
+  if (Serial.available()) {
+    int ch = Serial.read();
+    if (ch == 'p') {
+      paused = !paused;
+      Serial.printf("[bad_apple] %s at frame %u\n", paused ? "PAUSED" : "resumed",
+                    (unsigned)frame_idx);
+      if (!paused)   // re-anchor so playback resumes at tempo, not in a sprint
+        start_ms = millis() - (uint32_t)((uint64_t)frame_idx * 1000u / hdr.fps);
+    }
+  }
+  if (paused) { delay(50); return; }
+
   // ---- read next frame (overlaps the previous frame's panel drive) ----
   if (!readFrame()) {
     // end of file — loop the video

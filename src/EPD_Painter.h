@@ -178,6 +178,11 @@ struct PowerCtlConfig {
   // clear only those areas. tolerance is passed to computeDirtyRects.
   void clearDirtyAreas(uint8_t* framebuffer, int tolerance = 0, ClearMode mode = ClearMode::SOFT);
 
+  // TEMPORARY hardware probe: manually drives a three-band stripe pattern
+  // with raw drive codes to establish whether one gate row can be latched
+  // and driven twice (LE without CKV). See implementation for band layout.
+  void debugRowTest();
+
   void fxClear();
   void clearBuffers();  // zero all packed buffers (call before power-off to reset DC-balance baseline)
   void paint(uint8_t* framebuffer);
@@ -191,9 +196,11 @@ struct PowerCtlConfig {
   void paintPacked(const uint8_t* packed, int line_repeat = 1);
   void unpaintPacked(const uint8_t* packed);
   void paintLater(uint8_t* framebuffer);
-  void setInterlaceMode(bool mode){
-    interlace_mode = mode;
-  }
+  // No-op, kept for API compatibility. Interlace mode existed to spatially
+  // dither the old either-direction-per-chunk deferral artifact; the
+  // dual-plane ink engine drives both directions per pixel in one cycle,
+  // so there is nothing left to interlace.
+  void setInterlaceMode(bool) {}
 
   void setQuality(Quality quality);
 
@@ -243,21 +250,16 @@ private:
   uint8_t* dma_buffer1       = nullptr;  //  Row Double buffer A
   uint8_t* dma_buffer2       = nullptr;  //. Row Double buffer B
 
-  uint8_t* packed_fastbuffer  = nullptr;  // 2bpp current frame  (internal RAM)
-  uint8_t* packed_screenbuffer = nullptr; // 2bpp previous frame (PSRAM)
-  uint8_t* packed_paintbuffer = nullptr; // 2bpp previous frame (PSRAM)
+  uint8_t* packed_fastbuffer  = nullptr;  // dark-plane drive data (internal RAM)
+  uint8_t* packed_lightbuffer = nullptr;  // light-plane drive data (PSRAM, sparse)
+  uint8_t* packed_screenbuffer = nullptr; // 2bpp physical screen state (PSRAM)
+  uint8_t* packed_paintbuffer = nullptr; // 2bpp desired frame (PSRAM)
 
-  uint32_t* bitmask = nullptr;
+  uint32_t* bitmask = nullptr;        // per-row dark-plane chunk mask
+  uint32_t* bitmask_light = nullptr;  // per-row light-plane chunk mask
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
-  bool interlace_mode = false;
-
-  // Alternates each paint cycle so mixed-direction chunks flip which waveform
-  // wins: under continuous streaming (a new frame submitted every cycle) a
-  // constant preference would starve opposite-direction pixels in busy chunks
-  // indefinitely; alternating bounds their lag to one frame.
-  bool ink_priority_flip = false;
   bool shouldSkipRow = false;
   bool _autoShutdown = true;
   EPD_PainterShutdown* _shutdown = nullptr;
@@ -280,7 +282,10 @@ private:
   void powerOn();
   void powerOff();
   bool autoDetectBoard();
-  void sendRow(bool firstLine, bool lastLine=false, bool skipRow=false);
+  // noAdvance: pulse LE to latch the previously transmitted data onto the
+  // source outputs but do NOT clock CKV — the gate stays on the current row.
+  // Used to drive one row with two data sets (dark plane, then light plane).
+  void sendRow(bool firstLine, bool lastLine=false, bool noAdvance=false);
 
   // ---- Dual-core paint task ----
   SemaphoreHandle_t _paint_active_sem = nullptr;  // signals task to start

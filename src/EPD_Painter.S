@@ -175,39 +175,124 @@ epd_painter_convert_packed_fb_to_ink:
     retw.n
 
 
+
 // =============================================================================
-// epd_painter_ink_src
+// epd_painter_convert_packed_fb_to_ink_or
+//
+// Identical to epd_painter_convert_packed_fb_to_ink but ORs the generated
+// ink bytes into the output instead of overwriting. Lets the dark and light
+// planes merge into one row transmission: drive codes are per-pixel and the
+// planes are pixel-disjoint, so OR composes them losslessly.
+// =============================================================================
+    .text
+    .align 4
+    .global epd_painter_convert_packed_fb_to_ink_or
+    .type   epd_painter_convert_packed_fb_to_ink_or, @function
+
+epd_painter_convert_packed_fb_to_ink_or:
+    entry       a1, 32
+
+    movi        a7, 1
+    wsr.sar     a7
+
+    movi        a10, 0b01010101
+    s32i        a10, a1, 0
+    ee.vldbc.8  q7, a1
+
+    ee.vldbc.8.ip   q4, a5, 1
+    ee.vldbc.8.ip   q5, a5, 1
+    ee.vldbc.8.ip   q6, a5, 1
+
+.convor_loop:
+    extui       a9, a6, 31, 1
+    slli        a6, a6, 1
+
+    beqz        a9, .convor_skip
+
+    ee.vld.128.ip   q0, a2, 16
+
+    ee.andq         q3, q0, q7
+    ee.vsr.32       q2, q0
+    ee.andq         q2, q2, q7
+
+    ee.andq         q1, q3, q2
+    ee.notq         q0, q3
+    ee.andq         q0, q2, q0
+    ee.notq         q2, q2
+    ee.andq         q2, q3, q2
+
+    ee.vsl.32       q3, q1
+    ee.orq          q3, q3, q1
+
+    ee.vsl.32       q1, q0
+    ee.orq          q0, q0, q1
+
+    ee.vsl.32       q1, q2
+    ee.orq          q2, q2, q1
+
+    ee.andq         q3, q4, q3
+    ee.andq         q0, q5, q0
+    ee.orq          q3, q3, q0
+    ee.andq         q2, q6, q2
+    ee.orq          q3, q3, q2
+
+    // OR into the existing output instead of overwriting
+    ee.vld.128.ip   q1, a3, 0
+    ee.orq          q3, q3, q1
+    ee.vst.128.ip   q3, a3, 16
+    j               .convor_next
+
+.convor_skip:
+    addi        a2, a2, 16
+    addi        a3, a3, 16
+
+.convor_next:
+    addi        a4, a4, -16
+    bnez        a4, .convor_loop
+
+    retw.n
+
+// =============================================================================
+// epd_painter_ink_dual
 //
 // Delta-detects changed pixels between the new frame and the current screen
-// state, writes drive data into the fastbuffer, and returns an updated
-// chunk_flags bitmask indicating which chunks need driving.
+// state and emits BOTH drive directions as separate planes:
 //
-// Reads the new frame directly from the paintbuffer (PSRAM) rather than
-// expecting it pre-copied into the fastbuffer, so the frame crosses the
-// PSRAM bus exactly once and the fastbuffer is a pure drive-data output —
-// there is no per-cycle 130 KB paintbuffer→fastbuffer memcpy.
+//   dark plane  (fbD, internal) — new pixel values where the screen is white;
+//                                 driven with the darker waveform
+//   light plane (fbL, PSRAM)    — current screen values of changed non-white
+//                                 pixels; driven with the lighter waveform
 //
-// For each chunk the flags bit determines which waveform is tried first:
-//   bit=0 → try on-waveform first
-//   bit=1 → try off-waveform first
-// If the first waveform produces no driven pixels, the bit is restored and
-// the other waveform is tried. If both are empty, q7 (zero) is stored.
+// Unlike the old either/or chunk scheme there is no direction priority and
+// no deferral: a chunk containing both darkening and lightening work sets
+// its bit in both masks, and the paint task resolves it by latching the row
+// twice (once per plane) before advancing the gate — so mixed chunks fully
+// update in a single paint cycle.
+//
+// The two planes are disjoint per pixel by construction: dark data is
+// masked to screen==0 pixels, light data is screen&changed which is zero
+// wherever the screen is white.
+//
+// Screenbuffer bookkeeping matches the old routine: darkened pixels take
+// their new value, lightened pixels are recorded as white. The chunk is
+// written back only when something is driven.
 //
 // Parameters:
 //   a2 - paintbuffer row         (new desired pixel state, read-only)
-//   a3 - packed_fastbuffer row   (drive data out)
-//   a4 - packed_screenbuffer row (current physical screen state)
-//   a5 - Length in bytes (multiple of 16)
-//   a6 - Initial chunk_flags bitmask
+//   a3 - packed_fastbuffer row   (dark plane out; always written)
+//   a4 - packed_lightbuffer row  (light plane out; written when non-empty)
+//   a5 - packed_screenbuffer row (current physical screen state)
+//   a6 - Length in bytes (multiple of 16)
+//   a7 - uint32_t* out: light-plane chunk mask
 //
-// Returns (a2): updated chunk_flags
+// Returns (a2): dark-plane chunk mask
 // =============================================================================
-    .global epd_painter_ink_src
-    .type   epd_painter_ink_src, @function
+    .global epd_painter_ink_dual
+    .type   epd_painter_ink_dual, @function
     .text
     .align 4
 
-epd_painter_ink_src:
+epd_painter_ink_dual:
     entry           a1, 32
 
     // SAR=1 for ee.vsl.32 / ee.vsr.32 (1-bit shifts)
@@ -220,9 +305,8 @@ epd_painter_ink_src:
     ee.vldbc.8      q6, a1
     ee.vsl.32       q5, q6
 
-    ee.zero.q       q7              // q7 = zero (used for all-zero chunk stores)
-
-    mov             a11, a6         // working copy of chunk_flags
+    movi            a11, 0          // maskD accumulator
+    movi            a9,  0          // maskL accumulator
 
     // a12 = rotating single-bit mask, starts at bit 31
     movi            a12, 31
@@ -233,66 +317,23 @@ epd_painter_ink_src:
     movi            a10, 1
     wsr.sar         a10
 
-.inksrc_loop:
-    mov             a13, a3         // fastbuffer chunk (drive data out)
-    mov             a15, a2         // paintbuffer chunk base (for reloads)
-
-    // Test and clear the current chunk's bit in the flags
-    and             a10, a11, a12
-    xor             a11, a11, a12
-
-    bnez            a10, .inksrc_off_first
-
-.inksrc_on:
-    // On-waveform path: find pixels that need driving on.
-    // Only new pixels where the screen is currently zero are driven on.
+.inkdual_loop:
     ee.vld.128.ip   q2, a2, 16      // q2 = new (paintbuffer)
-    ee.vld.128.ip   q3, a4, 16      // q3 = current screen
+    ee.vld.128.ip   q3, a5, 16      // q3 = current screen
 
-    // Spread each screen pixel's value across both its bit positions,
-    // then invert to get a mask of pixels that are currently zero on screen
+    // q0 = spread(screen) inverted: both bits set wherever screen pixel == 0
     ee.vsl.32       q1, q3
     ee.andq         q1, q1, q5
     ee.orq          q0, q3, q1
     ee.vsr.32       q1, q0
     ee.andq         q1, q1, q6
     ee.orq          q0, q0, q1
-    ee.notq         q0, q0          // q0: both bits set wherever screen pixel == 0
+    ee.notq         q0, q0
 
-    ee.andq         q2, q2, q0      // keep only new pixels where screen is zero
+    ee.andq         q4, q2, q0      // q4 = dark plane: new values on white ground
 
-    // Check whether any pixels need driving (OR all 4 lanes into a scalar)
-    ee.movi.32.a    q2, a10, 0
-    ee.movi.32.a    q2, a14, 1
-    or              a10, a10, a14
-    ee.movi.32.a    q2, a14, 2
-    or              a10, a10, a14
-    ee.movi.32.a    q2, a14, 3
-    or              a10, a10, a14
-
-    beqz            a10, .inksrc_bit0_on_empty
-
-    // Write on-drive data to fastbuffer; merge into screenbuffer
-    ee.vst.128.ip   q2, a13, 0
-
-    addi            a10, a4, -16    // back up to the screenbuffer chunk just loaded
-    ee.vld.128.ip   q3, a10, 0
-    ee.orq          q3, q3, q2
-    ee.vst.128.ip   q3, a10, 0
-
-    j               .inksrc_next
-
-.inksrc_bit0_on_empty:
-    // On-waveform produced nothing; restore the flag bit and
-    // fall through to the off-waveform to handle this chunk instead
-    xor             a11, a11, a12
-
-    ee.vld.128.ip   q2, a15, 0      // reload new pixels from paintbuffer
-    addi            a10, a4, -16
-    ee.vld.128.ip   q3, a10, 0
-
+    // q0 = spread(new ^ screen): both bits set for every changed pixel
     ee.xorq         q0, q2, q3
-
     ee.vsl.32       q1, q0
     ee.andq         q1, q1, q5
     ee.orq          q0, q0, q1
@@ -300,34 +341,16 @@ epd_painter_ink_src:
     ee.andq         q1, q1, q6
     ee.orq          q0, q0, q1
 
-    ee.andq         q4, q3, q0
-    ee.vst.128.ip   q4, a13, 0
+    ee.andq         q1, q3, q0      // q1 = light plane: screen values of changed pixels
+                                    //      (zero where screen is white — disjoint from q4)
 
+    // screen' = (screen & ~changed) | dark
     ee.notq         q0, q0
     ee.andq         q3, q3, q0
-    addi            a10, a4, -16
-    ee.vst.128.ip   q3, a10, 0
+    ee.orq          q3, q3, q4
 
-    j               .inksrc_next
-
-.inksrc_off_first:
-    // Off-waveform path: find pixels that need driving off.
-    // Pixels that differ between new and current screen state are driven off.
-    ee.vld.128.ip   q2, a2, 16      // q2 = new (paintbuffer)
-    ee.vld.128.ip   q3, a4, 16      // q3 = current screen
-
-    // Spread changed pixels across both bit positions
-    ee.xorq         q0, q2, q3
-    ee.vsl.32       q1, q0
-    ee.andq         q1, q1, q5
-    ee.orq          q0, q0, q1
-    ee.vsr.32       q1, q0
-    ee.andq         q1, q1, q6
-    ee.orq          q0, q0, q1
-
-    ee.andq         q4, q3, q0      // screen pixels that differ = need driving off
-
-    // Check whether any pixels need driving
+    // Dark plane: store unconditionally (internal RAM), set mask bit if any
+    ee.vst.128.ip   q4, a3, 16
     ee.movi.32.a    q4, a10, 0
     ee.movi.32.a    q4, a14, 1
     or              a10, a10, a14
@@ -336,67 +359,41 @@ epd_painter_ink_src:
     ee.movi.32.a    q4, a14, 3
     or              a10, a10, a14
 
-    beqz            a10, .inksrc_bit1_off_empty
+    beqz            a10, .inkdual_no_dark
+    or              a11, a11, a12
+.inkdual_no_dark:
+    mov             a8, a10         // a8 accumulates "anything driven"
 
-    ee.vst.128.ip   q4, a13, 0
+    // Light plane: store only when non-empty (PSRAM — skip idle writes)
+    ee.movi.32.a    q1, a10, 0
+    ee.movi.32.a    q1, a14, 1
+    or              a10, a10, a14
+    ee.movi.32.a    q1, a14, 2
+    or              a10, a10, a14
+    ee.movi.32.a    q1, a14, 3
+    or              a10, a10, a14
 
-    ee.notq         q0, q0
-    ee.andq         q3, q3, q0
-    addi            a10, a4, -16    // back up to the screenbuffer chunk just loaded
+    beqz            a10, .inkdual_no_light
+    or              a9, a9, a12
+    ee.vst.128.ip   q1, a4, 16
+    j               .inkdual_light_done
+.inkdual_no_light:
+    addi            a4, a4, 16
+.inkdual_light_done:
+    or              a8, a8, a10
+
+    // Screenbuffer: write back only if this chunk drove anything
+    beqz            a8, .inkdual_next
+    addi            a10, a5, -16
     ee.vst.128.ip   q3, a10, 0
 
-    j               .inksrc_next
-
-.inksrc_bit1_off_empty:
-    // Off-waveform produced nothing; restore the flag bit and
-    // fall through to the on-waveform to handle this chunk instead
-    xor             a11, a11, a12
-
-    ee.vld.128.ip   q2, a15, 0      // reload new pixels from paintbuffer
-    addi            a10, a4, -16
-    ee.vld.128.ip   q3, a10, 0
-
-    ee.vsl.32       q1, q3
-    ee.andq         q1, q1, q5
-    ee.orq          q0, q3, q1
-    ee.vsr.32       q1, q0
-    ee.andq         q1, q1, q6
-    ee.orq          q0, q0, q1
-
-    ee.notq         q0, q0
-    ee.andq         q2, q2, q0
-
-    ee.movi.32.a    q2, a10, 0
-    ee.movi.32.a    q2, a14, 1
-    or              a10, a10, a14
-    ee.movi.32.a    q2, a14, 2
-    or              a10, a10, a14
-    ee.movi.32.a    q2, a14, 3
-    or              a10, a10, a14
-
-    beqz            a10, .inksrc_bit1_on_empty
-
-    ee.vst.128.ip   q2, a13, 0
-
-    addi            a10, a4, -16
-    ee.vld.128.ip   q3, a10, 0
-    ee.orq          q3, q3, q2
-    ee.vst.128.ip   q3, a10, 0
-
-    j               .inksrc_next
-
-.inksrc_bit1_on_empty:
-    // Both waveforms produced nothing for this chunk; write zero so the
-    // output word is defined rather than left with stale data
-    ee.vst.128.ip   q7, a13, 0
-
-.inksrc_next:
+.inkdual_next:
     srli            a12, a12, 1
-    addi            a3, a3, 16      // advance fastbuffer output (never loaded through)
-    addi            a5, a5, -16
-    bnez            a5, .inksrc_loop
+    addi            a6, a6, -16
+    bnez            a6, .inkdual_loop
 
-    mov             a2, a11
+    s32i            a9, a7, 0       // light-plane mask out
+    mov             a2, a11         // dark-plane mask return
     retw.n
 // =============================================================================
 // epd_sr_push_fast

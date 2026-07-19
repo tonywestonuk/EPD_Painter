@@ -28,7 +28,7 @@
 #endif
 
 // Define EPD_ASM_TIMING to enable assembly-function timing output.
-// Prints compact_pixels, epd_painter_ink_src, and convert_packed_fb_to_ink
+// Prints compact_pixels, epd_painter_ink_dual, and convert_packed_fb_to_ink
 // durations to serial each frame so you can compare old vs new .S builds.
 //#define EPD_ASM_TIMING
 
@@ -121,7 +121,11 @@ extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
   const uint8_t *waveform, uint32_t chunk_flags);
 
-extern "C" uint32_t epd_painter_ink_src(const uint8_t *packed_paintbuffer, uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t bitmask);
+extern "C" void epd_painter_convert_packed_fb_to_ink_or(
+  const uint8_t *packed_fb, uint8_t *output, uint32_t length,
+  const uint8_t *waveform, uint32_t chunk_flags);
+
+extern "C" uint32_t epd_painter_ink_dual(const uint8_t *packed_paintbuffer, uint8_t *packed_fastbuffer, uint8_t *packed_lightbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t *maskL_out);
 
 static inline void epd_gpio_func_sel(int pin) {
   esp_rom_gpio_pad_select_gpio((gpio_num_t)pin);
@@ -145,8 +149,7 @@ void EPD_Painter::setQuality(Quality quality) {
 // =============================================================================
 // sendRow()
 // =============================================================================
-void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
-  (void)skipRow;
+void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool noAdvance) {
   // Wait for LCD peripheral to finish consuming the previous row.
   // This also guarantees the previously-started DMA transfer is complete,
   // since the LCD FIFO cannot drain faster than DMA fills it.
@@ -188,6 +191,11 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool skipRow) {
     EPD_DELAY_US(1);
     _pin_ckv->set(true);
     _pin_spv->set(true);
+  } else if (noAdvance) {
+    // Latch the previously transmitted data onto the source outputs without
+    // advancing the gate: the current row drives this data for one more slot.
+    _pin_le->set(true);
+    _pin_le->set(false);
   } else {
     _pin_le->set(true);
     _pin_le->set(false);
@@ -350,7 +358,7 @@ bool EPD_Painter::begin() {
   // Prefer internal RAM for speed, fall back to PSRAM if the contiguous
   // internal-heap block isn't available (e.g. after WiFi has been brought
   // up first — leaves the heap fragmented).  PSRAM-backed fastbuffer is
-  // slower for the per-pixel ops in epd_painter_ink_src() but boots cleanly.
+  // slower for the per-pixel ops in epd_painter_ink_dual() but boots cleanly.
   packed_fastbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
   if (!packed_fastbuffer) {
@@ -364,7 +372,15 @@ bool EPD_Painter::begin() {
   packed_paintbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
 
+  // Light plane lives in PSRAM: ink writes and the pass loop reads only the
+  // chunks flagged in bitmask_light, so access is sparse (boundary chunks),
+  // not a full per-pass sweep.
+  packed_lightbuffer = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_SPIRAM));
+
   bitmask = static_cast<uint32_t *>(
+    heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
+  bitmask_light = static_cast<uint32_t *>(
     heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
 
   // ── Create the power driver for this board ──
@@ -498,6 +514,68 @@ int EPD_Painter::readPanelTemperatureC() {
 
 
 // =============================================================================
+// debugRowTest() — TEMPORARY hardware probe for the double-latch question.
+//
+// Drives a stripe pattern (1 black row every 6) three ways:
+//   band 1 rows   0..179: stripe row = one BLACK transmission (reference)
+//   band 2 rows 180..359: stripe row = BLACK transmission, then a FLOAT
+//                         transmission latched with noAdvance
+//   band 3 rows 360..539: stripe row = FLOAT transmission, then a BLACK
+//                         transmission latched with noAdvance
+//
+// If a gate row can be driven twice: all three bands show identical stripe
+// alignment. If the second latch lands on a different row, band 3's stripes
+// are displaced relative to bands 1/2 — and the displacement direction gives
+// the true latch/advance pairing.
+//
+// Raw drive codes per pixel pair: 0b10 = darken, 0b01 = whiten, 0b00 = float.
+// =============================================================================
+void EPD_Painter::debugRowTest() {
+  PanelPowerGuard guard(*this);
+  const int H = _config.height;
+  const uint8_t BLACK = 0x55;   // all 4 pixels: drive dark (code 0b01 — the
+                                // darker waveform tables are built from 1s)
+  const uint8_t FLOAT = 0x00;
+
+  for (int pass = 0; pass < 8; pass++) {
+    bool no_adv = false;
+    for (int row = 0; row < H; row++) {
+      const bool stripe = (row % 6) == 0;
+      const int  band   = row < 180 ? 1 : (row < 360 ? 2 : 3);
+
+      uint8_t first  = FLOAT;
+      uint8_t second = FLOAT;
+      bool    dbl    = false;
+      if (stripe) {
+        if (band == 1)      { first = BLACK; }
+        else if (band == 2) { first = BLACK; second = FLOAT; dbl = true; }
+        else                { first = FLOAT; second = BLACK; dbl = true; }
+      }
+
+      memset(dma_buffer, first, packed_row_bytes);
+      sendRow(row == 0, false, no_adv);
+      no_adv = false;
+
+      if (dbl) {
+        memset(dma_buffer, second, packed_row_bytes);
+        sendRow(false, false, false);
+        no_adv = true;
+      }
+    }
+    if (no_adv) {
+      memset(dma_buffer, FLOAT, packed_row_bytes);
+      sendRow(false, false, true);
+    }
+  }
+
+  // Final all-float pass to leave the panel undriven
+  for (int row = 0; row < H; row++) {
+    memset(dma_buffer, FLOAT, packed_row_bytes);
+    sendRow(row == 0, row == H - 1);
+  }
+}
+
+// =============================================================================
 // paint()
 // =============================================================================
 void EPD_Painter::paint(uint8_t *framebuffer) {
@@ -516,11 +594,11 @@ void EPD_Painter::paint(uint8_t *framebuffer) {
   printf("[paint] compact_pixels: %lld us\n", esp_timer_get_time() - _cp_t0);
 #endif
 
-  paintStage=(interlace_mode?3:2);
+  paintStage=2;
   xSemaphoreGive(_paint_buffer_sem); 
 
   // wait until this buffer has been picked up by the paint loop.
-  while(paintStage==(interlace_mode?3:2)){
+  while(paintStage==2){
       vTaskDelay(1);
   }
 }
@@ -544,10 +622,10 @@ void EPD_Painter::paintPacked(const uint8_t* packed, int line_repeat) {
       }
     }
   }
-  paintStage = (interlace_mode ? 3 : 2);
+  paintStage = 2;
   xSemaphoreGive(_paint_buffer_sem);
 
-  while (paintStage == (interlace_mode ? 3 : 2)) {
+  while (paintStage == 2) {
     vTaskDelay(1);
   }
 }
@@ -561,10 +639,10 @@ void EPD_Painter::unpaintPacked(const uint8_t* packed) {
   xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
   memcpy(packed_screenbuffer, packed, packed_row_bytes * _config.height);
   memset(packed_paintbuffer,  0x00,  packed_row_bytes * _config.height);
-  paintStage = (interlace_mode ? 3 : 2);
+  paintStage = 2;
   xSemaphoreGive(_paint_buffer_sem);
 
-  while (paintStage == (interlace_mode ? 3 : 2)) {
+  while (paintStage == 2) {
     vTaskDelay(1);
   }
 }
@@ -588,7 +666,7 @@ void EPD_Painter::paintLater(uint8_t *framebuffer) {
 #endif
 
     
-    paintStage=interlace_mode?3:2;
+    paintStage=2;
     xSemaphoreGive(_paint_buffer_sem); 
 }
 
@@ -609,36 +687,43 @@ void EPD_Painter::_paint_task_body() {
       xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
     }
 
-    // Fused delta pass: reads the new frame straight out of the (PSRAM)
-    // paintbuffer and writes drive data into the fastbuffer, so the frame
-    // crosses the PSRAM bus once — there is no paintbuffer→fastbuffer
-    // memcpy. The buffer semaphore is held for the whole sweep because the
+    // Dual-plane delta pass: reads the new frame straight out of the (PSRAM)
+    // paintbuffer and emits both drive directions — dark plane into the
+    // internal fastbuffer, light plane into PSRAM — with a chunk mask each.
+    // There is no direction priority and no deferral: chunks flagged in both
+    // masks are resolved in the pass loop by driving their row twice.
+    // The buffer semaphore is held for the whole sweep because the
     // paintbuffer is being read directly; paint()/paintPacked() block on it
     // rather than on paintStage if they arrive mid-sweep.
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
 #ifdef EPD_ASM_TIMING
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
-    const uint32_t base_flags = ink_priority_flip ? 0x00000000 : 0xffffffff;
-    ink_priority_flip = !ink_priority_flip;
-
+    uint32_t any_work = 0;
     for (int row = 0; row < _config.height; row++) {
       const uint8_t *pb_row = packed_paintbuffer + row * packed_row_bytes;
-      uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
-      uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
+      uint8_t *fbD_row = packed_fastbuffer  + row * packed_row_bytes;
+      uint8_t *fbL_row = packed_lightbuffer + row * packed_row_bytes;
+      uint8_t *sb_row  = packed_screenbuffer + row * packed_row_bytes;
 
-      if (interlace_mode){
-          bitmask[row] = epd_painter_ink_src(pb_row, fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
-      } else {
-          bitmask[row] = epd_painter_ink_src(pb_row, fb_row, sb_row, packed_row_bytes,  base_flags);
-      }
+      bitmask[row] = epd_painter_ink_dual(pb_row, fbD_row, fbL_row, sb_row,
+                                          packed_row_bytes, &bitmask_light[row]);
+      any_work |= bitmask[row] | bitmask_light[row];
     }
 #ifdef EPD_ASM_TIMING
-    printf("[paint_task] ink_src fused (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
+    printf("[paint_task] ink_dual (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
 #endif
     xSemaphoreGive(_paint_buffer_sem);
 
     paintStage-=1;
+
+    if (!any_work) {
+      // Nothing changed anywhere — skip the drive passes entirely. Under
+      // continuous streaming this makes the mop-up second cycle nearly free;
+      // for stills it makes repainting an unchanged frame a no-op.
+      vTaskDelay(1);
+      continue;
+    }
 
     PanelPowerGuard guard(*this);
 
@@ -667,6 +752,7 @@ void EPD_Painter::_paint_task_body() {
 
 #ifdef EPD_ASM_TIMING
     int64_t _conv_total = 0;
+    int _dbl_rows = 0;
 #endif
     for (uint8_t pass = 0; pass < wf_len; pass++) {
       uint8_t lighter_wf[3] = {
@@ -681,12 +767,30 @@ void EPD_Painter::_paint_task_body() {
       };
 
       for (int row = 0; row < _config.height; row++) {
-        uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
+        uint8_t *fbD_row = packed_fastbuffer  + row * packed_row_bytes;
+        uint8_t *fbL_row = packed_lightbuffer + row * packed_row_bytes;
+        const uint32_t mD   = bitmask[row];
+        const uint32_t mL   = bitmask_light[row];
+        const uint32_t both = mD & mL;
 #ifdef EPD_ASM_TIMING
         const int64_t _conv_t0 = esp_timer_get_time();
 #endif
-        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, darker_wf, bitmask[row]);
-        epd_painter_convert_packed_fb_to_ink(fb_row, dma_buffer, packed_row_bytes, lighter_wf, ~bitmask[row]);
+        // Masks are no longer complementary, so chunks with no work in
+        // either plane must be explicitly floated (zeroed) — convert skips
+        // them and would otherwise leave the previous row's drive data.
+        // Dark plane overwrites, light plane ORs on top: drive codes are
+        // per-pixel and the planes are pixel-disjoint, so both directions of
+        // a mixed chunk ride in ONE transmission with full retention dose.
+        // (Driving the row twice instead does NOT work — a second latch cuts
+        // the first data's retention from a full pass period to one ~30us
+        // row slot, starving its dose to nothing. Verified optically with
+        // the debugRowTest() stripe probe.)
+        memset(dma_buffer, 0x00, packed_row_bytes);
+        epd_painter_convert_packed_fb_to_ink(fbD_row, dma_buffer, packed_row_bytes, darker_wf, mD);
+        epd_painter_convert_packed_fb_to_ink_or(fbL_row, dma_buffer, packed_row_bytes, lighter_wf, mL);
+#ifdef EPD_ASM_TIMING
+        if (pass == 0 && both) _dbl_rows++;
+#endif
 #ifdef EPD_ASM_TIMING
         _conv_total += esp_timer_get_time() - _conv_t0;
 #endif
@@ -698,11 +802,11 @@ void EPD_Painter::_paint_task_body() {
       } else if (_config.quality == Quality::QUALITY_NORMAL) {
         EPD_DELAY_MS(4);
       } else{
-       // EPD_DELAY_MS(2);
       }
     }
 #ifdef EPD_ASM_TIMING
     printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
+    printf("[paint_task] merged (mixed-chunk) rows: %d of %d\n", _dbl_rows, _config.height);
 #endif
 
     vTaskDelay(1);  // yield once per frame: feeds WDT and lets application task run

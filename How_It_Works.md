@@ -11,8 +11,8 @@ first, then drills into each major subsystem.
 2. [Pixel Format — From Canvas to Panel](#2-pixel-format--from-canvas-to-panel)
 3. [The Screen Buffer — Tracking Physical State](#3-the-screen-buffer--tracking-physical-state)
 4. [Waveforms — How Greyscale Works](#4-waveforms--how-greyscale-works)
-5. [The Chunk Bitmask — 64-Pixel Decision Blocks](#5-the-chunk-bitmask--64-pixel-decision-blocks)
-6. [ink_on and ink_off — The Change Detection System](#6-ink_on-and-ink_off--the-change-detection-system)
+5. [The Chunk Bitmasks — 64-Pixel Work Blocks](#5-the-chunk-bitmasks--64-pixel-work-blocks)
+6. [ink_dual — The Change Detection System](#6-ink_dual--the-change-detection-system)
 7. [DMA and the LCD_CAM Peripheral](#7-dma-and-the-lcd_cam-peripheral)
 8. [sendRow() — The Row Timing Protocol](#8-sendrow--the-row-timing-protocol)
 9. [paint() — Full Frame Update Walk-Through](#9-paint--full-frame-update-walk-through)
@@ -125,7 +125,7 @@ maintains `packed_screenbuffer` as a **software model of the physical display**:
 ```
 
 The screen buffer starts as all `0x00` (all white) and is updated incrementally
-by `ink_on` and `ink_off` as pixels change. It is stored in PSRAM (it only
+by `ink_dual` as pixels change. It is stored in PSRAM (it only
 needs to be read once per frame, so speed is less critical).
 
 **Why is this necessary?**
@@ -203,142 +203,122 @@ mask against the pixel identity bits.
 
 ---
 
-## 5. The Chunk Bitmask — 64-Pixel Decision Blocks
+## 5. The Chunk Bitmasks — 64-Pixel Work Blocks
 
 All pixel processing in EPD Painter operates on **64-pixel chunks** (16 packed
-bytes), matching the ESP32-S3's 128-bit vector registers. Each row's chunks
-are tracked by a 32-bit bitmask stored in the `bitmask[]` array (one entry
-per row, MSB = first chunk on the left):
+bytes), matching the ESP32-S3's 128-bit vector registers. Each row carries
+**two** 32-bit chunk masks — one per drive plane (MSB = first chunk on the
+left, 15 of 32 bits used for a 960-pixel row):
 
 ```
   Row of 960 pixels = 240 packed bytes = 15 chunks of 64 pixels
 
-  bitmask[row]:  [1 0 1 1 0 0 0 1 0 0 0 0 0 0 0 x x x x x x x x x x x x x x x x x]
-                  ↑               ↑               ↑
-               bit 31          bit 24          bit 17    (bits 16–0 unused)
+  bitmask[row]        — dark plane:  chunk contains pixels to DARKEN
+  bitmask_light[row]  — light plane: chunk contains pixels to LIGHTEN
 
-  1 = this chunk is DARKENING (new pixels appearing)
-  0 = this chunk is LIGHTENING (pixels being removed or unchanged)
+  A chunk may be flagged in either mask, both, or neither.
 ```
 
-**The critical rule:** within any single chunk, ALL pixels must be either
-darkening or lightening — never a mix. If a pixel needs to lighten but falls
-within a darkening chunk, it is set to zero and deferred to a future frame.
-Over successive `paint()` calls, the display converges to the correct image.
+The chunk is purely a **work-skipping and SIMD-width unit** — it says nothing
+about direction. Direction is decided per pixel: the delta detector emits two
+pixel-disjoint drive planes, and both can be active inside the same chunk.
+(Earlier versions of the driver forced each chunk to be entirely darkening or
+entirely lightening, deferring opposite-direction pixels to later frames —
+that constraint, and its motion artifacts, no longer exist.)
 
-This constraint exists because each chunk receives either the darker or lighter
-waveform during `epd_painter_convert_packed_fb_to_ink()`. The bitmask tells
-the converter which waveform to apply:
+Per row, per waveform pass, the converter runs twice and the planes merge in
+the DMA buffer:
 
 ```
-  epd_painter_convert_packed_fb_to_ink(fb_row, dma_buf, len, darker_wf,  bitmask[row]);
-  epd_painter_convert_packed_fb_to_ink(fb_row, dma_buf, len, lighter_wf, ~bitmask[row]);
+  memset(dma_buf, 0, len);                             // float everything
+  epd_painter_convert_packed_fb_to_ink   (fbD_row, dma_buf, len, darker_wf,  bitmask[row]);
+  epd_painter_convert_packed_fb_to_ink_or(fbL_row, dma_buf, len, lighter_wf, bitmask_light[row]);
 ```
 
-The first call processes chunks flagged as darkening; the second call processes
-the complement (lightening chunks). Together they cover every chunk exactly
-once, fully populating the DMA output buffer for that row.
-
-The bitmask persists across frames — it is passed back into `ink_on`/`ink_off`
-on the next `paint()` call so the system remembers which chunks were active.
+The first call writes ink for dark-plane chunks; the second computes ink for
+light-plane chunks and **ORs** it in. Ink drive codes are per-pixel and the
+planes are pixel-disjoint, so the OR composes them losslessly: one row
+transmission carries darken codes, whiten codes and floats side by side.
+Chunks in neither mask keep the memset floats and are skipped by both calls.
 
 ---
 
-## 6. ink_on and ink_off — The Change Detection System
+## 6. ink_dual — The Change Detection System
 
-These two assembly functions are the heart of the delta-update system. They
-compare the desired new frame (`packed_fastbuffer`) against the current
-physical state (`packed_screenbuffer`) and work out what needs to be driven.
-
-Both functions are called per row, processing all chunks in that row
-sequentially.
-
-### ink_on — Turning Pixels On
+`epd_painter_ink_dual` is the heart of the delta-update system. Called once
+per row, it compares the desired new frame (read directly from the PSRAM
+`packed_paintbuffer`) against the current physical state
+(`packed_screenbuffer`) and emits both drive planes in one sweep:
 
 ```
   For each 64-pixel chunk:
 
-  ┌──────────────────────┬──────────────────────────────────────────┐
-  │  Screen buffer       │  Action                                  │
-  ├──────────────────────┼──────────────────────────────────────────┤
-  │  00  (white)         │  Copy new pixel value to output          │
-  │                      │  Mark pixel in screen buffer             │
-  ├──────────────────────┼──────────────────────────────────────────┤
-  │  01/10/11 (non-white)│  Skip — pixel is already occupied.       │
-  │                      │  Zero this pixel in the fastbuffer.      │
-  │                      │  ink_off must clear it to white first.   │
-  └──────────────────────┴──────────────────────────────────────────┘
+  dark plane  = new  & spread(screen == 00)      pixels appearing on white
+                                                 ground, at their new value
+  light plane = screen & spread(new != screen)   changed pixels that are
+                                                 currently non-white, at
+                                                 their CURRENT value
+
+  screen'     = (screen & ~changed) | dark       bookkeeping: darkened pixels
+                                                 take their new value,
+                                                 lightened pixels become white
 ```
 
-After masking, if any pixels in the chunk survived (are non-zero), the chunk
-is flagged as darkening (bit set in the returned bitmask). The screen buffer
-is updated to reflect the newly occupied pixels.
+The two planes are pixel-disjoint by construction: the dark plane is masked
+to `screen == 00` pixels, and the light plane is `screen & changed`, which is
+zero wherever the screen is white. There is no direction priority, no
+fallback path, and no deferral — a chunk with work in both directions simply
+sets its bit in both masks.
 
-The mask logic in the assembly works by spreading each pixel's bits — if
-either bit of a 2bpp pixel in the screen buffer is set, both bits become set,
-then the mask is inverted. The result is `11` only for pixels that were `00`:
+The dark plane lands in the internal-RAM `packed_fastbuffer` (read every
+pass); the light plane lands in PSRAM and is only touched — by ink_dual's
+stores and the converter's loads — for chunks actually flagged, so its PSRAM
+traffic is sparse.
 
-```
-  screen pixel = 01       screen pixel = 00
-
-  spread low→high:  11    spread low→high:  00
-  invert:           00    invert:           11
-                    ↑                       ↑
-               blocked                  allowed
-```
-
-### ink_off — Turning Pixels Off
-
-`ink_off` processes chunks that `ink_on` did NOT flag (bitmask bit = 0).
-Chunks with bitmask bit = 1 are skipped entirely.
+The spread/invert mask logic is unchanged from the original design: a 2bpp
+pixel's bits are smeared across both positions and inverted, yielding `11`
+only for pixels that were `00`; XOR-then-spread flags changed pixels:
 
 ```
-  For each unflagged 64-pixel chunk:
-
-  ┌──────────────────────────────────────┬───────────────────────────────────┐
-  │  Condition                           │  Action                           │
-  ├──────────────────────────────────────┼───────────────────────────────────┤
-  │  screen buffer DIFFERS from          │  Write screen buffer value to     │
-  │  packed_fastbuffer                   │  fastbuffer (to drive pixel back  │
-  │  (pixel needs to change shade        │  toward white).                   │
-  │   OR needs to go to white)           │  Clear pixel in screen buffer.    │
-  ├──────────────────────────────────────┼───────────────────────────────────┤
-  │  screen buffer MATCHES               │  Set fastbuffer to zero           │
-  │  packed_fastbuffer                   │  (no drive needed).               │
-  └──────────────────────────────────────┴───────────────────────────────────┘
+  screen pixel = 01       screen pixel = 00      desired=01, screen=10
+  spread:  11             spread:  00            XOR = 11 → differs
+  invert:  00 (blocked)   invert:  11 (allowed)  spread = 11 → drive it
 ```
 
-XOR is used to find differences. The difference is spread across both bits of
-each pixel slot so that any change to either bit flags the whole pixel:
+### The Two-Frame Grey Transition
+
+A pixel changing between two non-white shades still takes **two cycles**,
+because darkening only starts from white ground:
 
 ```
-  desired = 01,  screen = 10     desired = 10,  screen = 10
-  XOR     = 11  → pixel differs  XOR     = 00  → pixel matches
-  spread  = 11  → drive it       spread  = 00  → skip it
+  Cycle N:  pixel is in the light plane — driven toward white,
+            screen buffer records 00.
+  Cycle N+1: pixel is in the dark plane — driven to its new value.
 ```
 
-### The Two-Frame Transition
+This is why a submitted frame runs two paint cycles (`paintStage = 2`): the
+second cycle picks up these two-step transitions. A cycle in which no chunk
+has any work skips its drive passes entirely.
 
-A pixel changing from dark grey (`10`) to light grey (`01`) takes **two frames**:
+### Why One Transmission — the Charge-Retention Rule
 
-```
-  Frame N:                          Frame N+1:
-  ┌──────────────────────────┐      ┌──────────────────────────┐
-  │ ink_off detects mismatch │      │ screen buffer now = 00   │
-  │ writes 10 to fastbuffer  │  →   │ ink_on copies 01 to      │
-  │ clears screen buffer     │      │ fastbuffer & screen buf   │
-  │  (screen buf → 00)       │      │  (screen buf → 01)        │
-  └──────────────────────────┘      └──────────────────────────┘
-     Panel moving toward white         Panel moving toward light grey
-```
+The obvious alternative for a mixed chunk — transmit the row twice per pass,
+once per plane, latching both onto the same gate row — **does not work**, and
+the reason is worth recording:
 
-### Deferred Pixels
+A row's ink dose does not come from its ~30 µs transmission slot. When a row
+is latched, each pixel stores the drive voltage on its own capacitance and
+keeps driving the ink **until that row is next latched** — normally a full
+pass period (milliseconds). Retention, not the row slot, is where the dose
+comes from; it is also why 540 rows can effectively drive in parallel.
 
-If a pixel needs to lighten but falls within a chunk that is darkening
-(bitmask bit = 1), `ink_on` zeros that pixel in the fastbuffer and `ink_off`
-skips the entire chunk. That pixel is **deferred** — it will be processed on a
-future frame when the chunk is no longer darkening. Over successive `paint()`
-calls the display converges to the correct image.
+Latching a second data set onto the same row therefore discharges the first
+after one row slot — starving it of ~99.8% of its dose. This was verified
+optically (`debugRowTest()` drives a stripe pattern three ways and scans the
+result): a second latch on the same gate row lands perfectly aligned — the
+hardware supports it — but whichever data is latched *first* leaves almost no
+ink behind. Hence the per-pixel OR-merge into a single transmission, which
+gives every pixel the full retention dose.
 
 ---
 
@@ -482,32 +462,27 @@ This is what happens every time you call `paint()`:
          │
          │  epd_painter_compact_pixels()
          ▼
-  packed_fastbuffer (2bpp, internal RAM)
+  packed_paintbuffer (2bpp, PSRAM — the desired frame)
          │
          │  For each row:
-         ├──── ink_on()  ───────────────────────────────────────────┐
-         │     compares fastbuffer with packed_screenbuffer          │
-         │     pixels on white screen → copied to output            │
-         │     pixels on occupied screen → zeroed (deferred)        │
-         │     screen buffer updated (new pixels marked)            │
-         │     returns bitmask: 1 = darkening chunk                 │
+         ├──── ink_dual() ──────────────────────────────────────────┐
+         │     compares paintbuffer with packed_screenbuffer        │
+         │     dark plane  = new values on white ground             │
+         │       → packed_fastbuffer (internal RAM)                 │
+         │     light plane = screen values of changed non-white px  │
+         │       → packed_lightbuffer (PSRAM, sparse)               │
+         │     screen buffer updated (darkened marked, lightened    │
+         │       recorded as white)                                 │
+         │     returns bitmask[] (dark) + bitmask_light[] per row   │
          │                                                          │
-         ├──── ink_off() ───────────────────────────────────────────┤
-         │     skips chunks with bitmask bit = 1                    │
-         │     changed pixels → screen value written to fastbuffer  │
-         │     screen buffer cleared for those pixels               │
-         │     matching pixels → fastbuffer zeroed                  │
-         │                                                          ▼
-         │                                             packed_fastbuffer
-         │                                             (now contains only
-         │                                              pixels that need
-         │                                              driving this frame)
+         │  (a cycle with no flagged chunks skips the passes)       │
          │
          │  For each of 7 waveform passes:
          │    For each row:
-         │      convert_packed_fb_to_ink(darker_wf,  bitmask[row])  ← darkening chunks
-         │      convert_packed_fb_to_ink(lighter_wf, ~bitmask[row]) ← lightening chunks
-         │      sendRow()                                           ← DMA to panel
+         │      memset(dma_buf, 0)                                  ← float default
+         │      convert_packed_fb_to_ink   (darker_wf,  bitmask)    ← dark chunks write
+         │      convert_packed_fb_to_ink_or(lighter_wf, bitmask_light) ← light chunks OR in
+         │      sendRow()                                           ← one DMA transmission
          │
          └──► Neutralise: send all-zero frame (stops all pixel movement)
 ```
@@ -529,7 +504,7 @@ in several stages:
 ```
   Stage 1: Set packed_fastbuffer to all 0x00 (all-white target)
 
-  Stage 2: ink_off() on all rows
+  Stage 2: ink_dual() on all rows (all work lands in the light plane)
            → marks all currently inked pixels as needing to clear
            → screen buffer reset to all 0x00
 
@@ -579,7 +554,7 @@ be redrawn on a fresh white background.
 `packed_fastbuffer` is kept in internal RAM because it is read once per row
 per pass — at 7 passes × 540 rows = 3,780 sequential reads per frame. PSRAM
 would be a significant bottleneck here. The screen buffer is only read once
-per frame (during `ink_on`/`ink_off`) so PSRAM is fine.
+per frame (during `ink_dual`) so PSRAM is fine.
 
 ---
 
@@ -589,7 +564,7 @@ per frame (during `ink_on`/`ink_off`) so PSRAM is fine.
   EPD_Painter.h              Class definition, config struct, buffer pointers
   EPD_Painter.cpp            C++ driver: init, DMA setup, paint(), clear(), sendRow()
   EPD_Painter.S              Xtensa assembly: pixel packing, waveform conversion,
-                             ink_on, ink_off
+                             ink_dual
   EPD_Painter_presets.h      Board-specific pin configurations
   epd_painter_powerctl       TPS65185 power management (for boards with this chip)
   epd_painter_shutdown.h/.cpp  Screen-buffer reconciliation across power cycles,
@@ -612,7 +587,7 @@ per frame (during `ink_on`/`ink_off`) so PSRAM is fine.
      ▼
   packed_fastbuffer[]    2bpp packed, internal RAM
 
-     │  ink_on() / ink_off()  per row
+     │  ink_dual()  per row
      │  (delta detection vs packed_screenbuffer)
      │  (bitmask[] tracks darkening vs lightening chunks)
      ▼
