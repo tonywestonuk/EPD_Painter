@@ -28,7 +28,7 @@
 #endif
 
 // Define EPD_ASM_TIMING to enable assembly-function timing output.
-// Prints compact_pixels, epd_painter_ink, and convert_packed_fb_to_ink
+// Prints compact_pixels, epd_painter_ink_src, and convert_packed_fb_to_ink
 // durations to serial each frame so you can compare old vs new .S builds.
 //#define EPD_ASM_TIMING
 
@@ -121,7 +121,7 @@ extern "C" void epd_painter_convert_packed_fb_to_ink(
   const uint8_t *packed_fb, uint8_t *output, uint32_t length,
   const uint8_t *waveform, uint32_t chunk_flags);
 
-extern "C" uint32_t epd_painter_ink(uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t bitmask);
+extern "C" uint32_t epd_painter_ink_src(const uint8_t *packed_paintbuffer, uint8_t *packed_fastbuffer, uint8_t *packed_screenbuffer, uint32_t length, uint32_t bitmask);
 
 static inline void epd_gpio_func_sel(int pin) {
   esp_rom_gpio_pad_select_gpio((gpio_num_t)pin);
@@ -350,7 +350,7 @@ bool EPD_Painter::begin() {
   // Prefer internal RAM for speed, fall back to PSRAM if the contiguous
   // internal-heap block isn't available (e.g. after WiFi has been brought
   // up first — leaves the heap fragmented).  PSRAM-backed fastbuffer is
-  // slower for the per-pixel ops in epd_painter_ink() but boots cleanly.
+  // slower for the per-pixel ops in epd_painter_ink_src() but boots cleanly.
   packed_fastbuffer = static_cast<uint8_t *>(
     heap_caps_aligned_alloc(16, packed_size, MALLOC_CAP_INTERNAL));
   if (!packed_fastbuffer) {
@@ -609,14 +609,13 @@ void EPD_Painter::_paint_task_body() {
       xSemaphoreTake(_paint_active_sem, portMAX_DELAY);
     }
 
+    // Fused delta pass: reads the new frame straight out of the (PSRAM)
+    // paintbuffer and writes drive data into the fastbuffer, so the frame
+    // crosses the PSRAM bus once — there is no paintbuffer→fastbuffer
+    // memcpy. The buffer semaphore is held for the whole sweep because the
+    // paintbuffer is being read directly; paint()/paintPacked() block on it
+    // rather than on paintStage if they arrive mid-sweep.
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
-    memcpy(packed_fastbuffer, packed_paintbuffer, packed_row_bytes*_config.height);
-    xSemaphoreGive(_paint_buffer_sem);
-
-    paintStage-=1;
-
-    PanelPowerGuard guard(*this);
-
 #ifdef EPD_ASM_TIMING
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
@@ -624,18 +623,24 @@ void EPD_Painter::_paint_task_body() {
     ink_priority_flip = !ink_priority_flip;
 
     for (int row = 0; row < _config.height; row++) {
+      const uint8_t *pb_row = packed_paintbuffer + row * packed_row_bytes;
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
       uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
 
       if (interlace_mode){
-          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
+          bitmask[row] = epd_painter_ink_src(pb_row, fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
       } else {
-          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  base_flags);
+          bitmask[row] = epd_painter_ink_src(pb_row, fb_row, sb_row, packed_row_bytes,  base_flags);
       }
     }
 #ifdef EPD_ASM_TIMING
-    printf("[paint_task] epd_painter_ink (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
+    printf("[paint_task] ink_src fused (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
 #endif
+    xSemaphoreGive(_paint_buffer_sem);
+
+    paintStage-=1;
+
+    PanelPowerGuard guard(*this);
 
     const uint8_t *lt_wf;
     const uint8_t *dk_wf;

@@ -176,32 +176,38 @@ epd_painter_convert_packed_fb_to_ink:
 
 
 // =============================================================================
-// epd_painter_ink
+// epd_painter_ink_src
 //
-// Delta-detects changed pixels between the new framebuffer and the current
-// screen state, writes drive data into both buffers, and returns an updated
+// Delta-detects changed pixels between the new frame and the current screen
+// state, writes drive data into the fastbuffer, and returns an updated
 // chunk_flags bitmask indicating which chunks need driving.
 //
+// Reads the new frame directly from the paintbuffer (PSRAM) rather than
+// expecting it pre-copied into the fastbuffer, so the frame crosses the
+// PSRAM bus exactly once and the fastbuffer is a pure drive-data output —
+// there is no per-cycle 130 KB paintbuffer→fastbuffer memcpy.
+//
 // For each chunk the flags bit determines which waveform is tried first:
-//   bit=0 → try on-waveform first  (pixels to lighten)
-//   bit=1 → try off-waveform first (pixels to darken)
+//   bit=0 → try on-waveform first
+//   bit=1 → try off-waveform first
 // If the first waveform produces no driven pixels, the bit is restored and
 // the other waveform is tried. If both are empty, q7 (zero) is stored.
 //
 // Parameters:
-//   a2 - packed_fastbuffer row  (new desired pixel state)
-//   a3 - packed_screenbuffer row (current physical screen state)
-//   a4 - Length in bytes (multiple of 16)
-//   a5 - Initial chunk_flags bitmask
+//   a2 - paintbuffer row         (new desired pixel state, read-only)
+//   a3 - packed_fastbuffer row   (drive data out)
+//   a4 - packed_screenbuffer row (current physical screen state)
+//   a5 - Length in bytes (multiple of 16)
+//   a6 - Initial chunk_flags bitmask
 //
 // Returns (a2): updated chunk_flags
 // =============================================================================
-    .global epd_painter_ink
-    .type   epd_painter_ink, @function
+    .global epd_painter_ink_src
+    .type   epd_painter_ink_src, @function
     .text
     .align 4
 
-epd_painter_ink:
+epd_painter_ink_src:
     entry           a1, 32
 
     // SAR=1 for ee.vsl.32 / ee.vsr.32 (1-bit shifts)
@@ -216,7 +222,7 @@ epd_painter_ink:
 
     ee.zero.q       q7              // q7 = zero (used for all-zero chunk stores)
 
-    mov             a11, a5         // working copy of chunk_flags
+    mov             a11, a6         // working copy of chunk_flags
 
     // a12 = rotating single-bit mask, starts at bit 31
     movi            a12, 31
@@ -227,20 +233,21 @@ epd_painter_ink:
     movi            a10, 1
     wsr.sar         a10
 
-.ink_loop:
-    mov             a13, a2         // save current fastbuffer row pointer
+.inksrc_loop:
+    mov             a13, a3         // fastbuffer chunk (drive data out)
+    mov             a15, a2         // paintbuffer chunk base (for reloads)
 
     // Test and clear the current chunk's bit in the flags
     and             a10, a11, a12
     xor             a11, a11, a12
 
-    bnez            a10, .ink_off_first
+    bnez            a10, .inksrc_off_first
 
-.ink_on:
-    // On-waveform path: find pixels that need lightening.
-    // Only fastbuffer pixels where the screen is currently zero are driven on.
-    ee.vld.128.ip   q2, a2, 16      // q2 = new (fastbuffer)
-    ee.vld.128.ip   q3, a3, 16      // q3 = current screen
+.inksrc_on:
+    // On-waveform path: find pixels that need driving on.
+    // Only new pixels where the screen is currently zero are driven on.
+    ee.vld.128.ip   q2, a2, 16      // q2 = new (paintbuffer)
+    ee.vld.128.ip   q3, a4, 16      // q3 = current screen
 
     // Spread each screen pixel's value across both its bit positions,
     // then invert to get a mask of pixels that are currently zero on screen
@@ -252,7 +259,7 @@ epd_painter_ink:
     ee.orq          q0, q0, q1
     ee.notq         q0, q0          // q0: both bits set wherever screen pixel == 0
 
-    ee.andq         q2, q2, q0      // keep only fastbuffer pixels where screen is zero
+    ee.andq         q2, q2, q0      // keep only new pixels where screen is zero
 
     // Check whether any pixels need driving (OR all 4 lanes into a scalar)
     ee.movi.32.a    q2, a10, 0
@@ -263,25 +270,25 @@ epd_painter_ink:
     ee.movi.32.a    q2, a14, 3
     or              a10, a10, a14
 
-    beqz            a10, .bit0_on_empty
+    beqz            a10, .inksrc_bit0_on_empty
 
     // Write on-drive data to fastbuffer; merge into screenbuffer
     ee.vst.128.ip   q2, a13, 0
 
-    addi            a10, a3, -16    // back up to the screenbuffer chunk just loaded
+    addi            a10, a4, -16    // back up to the screenbuffer chunk just loaded
     ee.vld.128.ip   q3, a10, 0
     ee.orq          q3, q3, q2
     ee.vst.128.ip   q3, a10, 0
 
-    j               .ink_next
+    j               .inksrc_next
 
-.bit0_on_empty:
+.inksrc_bit0_on_empty:
     // On-waveform produced nothing; restore the flag bit and
     // fall through to the off-waveform to handle this chunk instead
     xor             a11, a11, a12
 
-    ee.vld.128.ip   q2, a13, 0
-    addi            a10, a3, -16
+    ee.vld.128.ip   q2, a15, 0      // reload new pixels from paintbuffer
+    addi            a10, a4, -16
     ee.vld.128.ip   q3, a10, 0
 
     ee.xorq         q0, q2, q3
@@ -298,16 +305,16 @@ epd_painter_ink:
 
     ee.notq         q0, q0
     ee.andq         q3, q3, q0
-    addi            a10, a3, -16
+    addi            a10, a4, -16
     ee.vst.128.ip   q3, a10, 0
 
-    j               .ink_next
+    j               .inksrc_next
 
-.ink_off_first:
-    // Off-waveform path: find pixels that need darkening.
+.inksrc_off_first:
+    // Off-waveform path: find pixels that need driving off.
     // Pixels that differ between new and current screen state are driven off.
-    ee.vld.128.ip   q2, a2, 16      // q2 = new (fastbuffer)
-    ee.vld.128.ip   q3, a3, 16      // q3 = current screen
+    ee.vld.128.ip   q2, a2, 16      // q2 = new (paintbuffer)
+    ee.vld.128.ip   q3, a4, 16      // q3 = current screen
 
     // Spread changed pixels across both bit positions
     ee.xorq         q0, q2, q3
@@ -329,24 +336,24 @@ epd_painter_ink:
     ee.movi.32.a    q4, a14, 3
     or              a10, a10, a14
 
-    beqz            a10, .bit1_off_empty
+    beqz            a10, .inksrc_bit1_off_empty
 
     ee.vst.128.ip   q4, a13, 0
 
     ee.notq         q0, q0
     ee.andq         q3, q3, q0
-    addi            a10, a3, -16    // back up to the screenbuffer chunk just loaded
+    addi            a10, a4, -16    // back up to the screenbuffer chunk just loaded
     ee.vst.128.ip   q3, a10, 0
 
-    j               .ink_next
+    j               .inksrc_next
 
-.bit1_off_empty:
+.inksrc_bit1_off_empty:
     // Off-waveform produced nothing; restore the flag bit and
     // fall through to the on-waveform to handle this chunk instead
     xor             a11, a11, a12
 
-    ee.vld.128.ip   q2, a13, 0
-    addi            a10, a3, -16
+    ee.vld.128.ip   q2, a15, 0      // reload new pixels from paintbuffer
+    addi            a10, a4, -16
     ee.vld.128.ip   q3, a10, 0
 
     ee.vsl.32       q1, q3
@@ -367,26 +374,27 @@ epd_painter_ink:
     ee.movi.32.a    q2, a14, 3
     or              a10, a10, a14
 
-    beqz            a10, .bit1_on_empty
+    beqz            a10, .inksrc_bit1_on_empty
 
     ee.vst.128.ip   q2, a13, 0
 
-    addi            a10, a3, -16    // back up to the screenbuffer chunk just loaded
+    addi            a10, a4, -16
     ee.vld.128.ip   q3, a10, 0
     ee.orq          q3, q3, q2
     ee.vst.128.ip   q3, a10, 0
 
-    j               .ink_next
+    j               .inksrc_next
 
-.bit1_on_empty:
+.inksrc_bit1_on_empty:
     // Both waveforms produced nothing for this chunk; write zero so the
     // output word is defined rather than left with stale data
     ee.vst.128.ip   q7, a13, 0
 
-.ink_next:
+.inksrc_next:
     srli            a12, a12, 1
-    addi            a4, a4, -16
-    bnez            a4, .ink_loop
+    addi            a3, a3, 16      // advance fastbuffer output (never loaded through)
+    addi            a5, a5, -16
+    bnez            a5, .inksrc_loop
 
     mov             a2, a11
     retw.n
