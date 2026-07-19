@@ -181,7 +181,14 @@ struct PowerCtlConfig {
   void fxClear();
   void clearBuffers();  // zero all packed buffers (call before power-off to reset DC-balance baseline)
   void paint(uint8_t* framebuffer);
-  void paintPacked(const uint8_t* packed);
+
+  // Paint from a pre-packed 2bpp buffer (4 pixels/byte, first pixel in the
+  // MSBs). line_repeat > 1 treats `packed` as a reduced-height buffer of
+  // height/line_repeat rows and drives each source row line_repeat times —
+  // e.g. line_repeat=2 paints a 960×270 buffer as 960×540, halving the
+  // bandwidth needed when streaming frames from storage. height must be an
+  // exact multiple of line_repeat.
+  void paintPacked(const uint8_t* packed, int line_repeat = 1);
   void unpaintPacked(const uint8_t* packed);
   void paintLater(uint8_t* framebuffer);
   void setInterlaceMode(bool mode){
@@ -245,6 +252,12 @@ private:
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
   bool interlace_mode = false;
+
+  // Alternates each paint cycle so mixed-direction chunks flip which waveform
+  // wins: under continuous streaming (a new frame submitted every cycle) a
+  // constant preference would starve opposite-direction pixels in busy chunks
+  // indefinitely; alternating bounds their lag to one frame.
+  bool ink_priority_flip = false;
   bool shouldSkipRow = false;
   bool _autoShutdown = true;
   EPD_PainterShutdown* _shutdown = nullptr;

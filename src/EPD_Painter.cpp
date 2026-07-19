@@ -526,11 +526,24 @@ void EPD_Painter::paint(uint8_t *framebuffer) {
 }
 
 // =============================================================================
-// paintPacked() — like paint() but skips compaction; buffer is already 2bpp
+// paintPacked() — like paint() but skips compaction; buffer is already 2bpp.
+// line_repeat > 1: `packed` holds height/line_repeat rows, each driven
+// line_repeat times (vertical pixel doubling for reduced-bandwidth streams).
 // =============================================================================
-void EPD_Painter::paintPacked(const uint8_t* packed) {
+void EPD_Painter::paintPacked(const uint8_t* packed, int line_repeat) {
   xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
-  memcpy(packed_paintbuffer, packed, (_config.width * _config.height) / 4);
+  if (line_repeat <= 1) {
+    memcpy(packed_paintbuffer, packed, (_config.width * _config.height) / 4);
+  } else {
+    uint8_t* dst = packed_paintbuffer;
+    const int src_rows = _config.height / line_repeat;
+    for (int r = 0; r < src_rows; ++r) {
+      for (int k = 0; k < line_repeat; ++k) {
+        memcpy(dst, packed + r * packed_row_bytes, packed_row_bytes);
+        dst += packed_row_bytes;
+      }
+    }
+  }
   paintStage = (interlace_mode ? 3 : 2);
   xSemaphoreGive(_paint_buffer_sem);
 
@@ -607,6 +620,9 @@ void EPD_Painter::_paint_task_body() {
 #ifdef EPD_ASM_TIMING
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
+    const uint32_t base_flags = ink_priority_flip ? 0x00000000 : 0xffffffff;
+    ink_priority_flip = !ink_priority_flip;
+
     for (int row = 0; row < _config.height; row++) {
       uint8_t *fb_row = packed_fastbuffer + row * packed_row_bytes;
       uint8_t *sb_row = packed_screenbuffer + row * packed_row_bytes;
@@ -614,7 +630,7 @@ void EPD_Painter::_paint_task_body() {
       if (interlace_mode){
           bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  row%2?0xffffffff:0x00);
       } else {
-          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  0xffffffff);
+          bitmask[row] = epd_painter_ink(fb_row, sb_row, packed_row_bytes,  base_flags);
       }
     }
 #ifdef EPD_ASM_TIMING
@@ -676,6 +692,8 @@ void EPD_Painter::_paint_task_body() {
         EPD_DELAY_MS(8);
       } else if (_config.quality == Quality::QUALITY_NORMAL) {
         EPD_DELAY_MS(4);
+      } else{
+       // EPD_DELAY_MS(2);
       }
     }
 #ifdef EPD_ASM_TIMING

@@ -111,10 +111,13 @@ display.paintLater();   // returns immediately; panel updates in background
 
 Like `paint()` but accepts a pre-packed 2bpp buffer directly, skipping the 8bpp→2bpp compaction step. Useful when you already have data in the driver's internal format (e.g. loaded from storage).
 
+The optional `line_repeat` parameter (default 1) treats the buffer as a reduced-height frame of `height / line_repeat` rows and drives each stored row `line_repeat` times. With `line_repeat = 2` a 960×270 buffer fills a 960×540 panel — halving the bandwidth needed when streaming frames from storage (see `examples/other/bad_apple` and `tools/video2epv.py`). `height` must be an exact multiple of `line_repeat`.
+
 Blocks until the paint task picks it up.
 
 ```cpp
-display.paintPacked(packed_buf);   // packed_buf: 2bpp, 4 pixels per byte
+display.paintPacked(packed_buf);      // packed_buf: 2bpp, 4 pixels per byte
+display.paintPacked(half_buf, 2);     // half-height buffer, each row driven twice
 ```
 
 ---
