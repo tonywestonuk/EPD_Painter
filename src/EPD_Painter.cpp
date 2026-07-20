@@ -383,6 +383,18 @@ bool EPD_Painter::begin() {
   bitmask_light = static_cast<uint32_t *>(
     heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
 
+  // Decision engine bookkeeping (small, internal): per-line todo words and
+  // sweep lists — see DECISION_ENGINE.md.
+  dec_todo = static_cast<uint32_t *>(
+    heap_caps_aligned_alloc(4, _config.height * 4, MALLOC_CAP_INTERNAL));
+  dec_sweeps = static_cast<LineSweep *>(
+    heap_caps_aligned_alloc(4, _config.height * DEC_MAX_SWEEPS * sizeof(LineSweep),
+                            MALLOC_CAP_INTERNAL));
+  dec_nsweeps = static_cast<uint8_t *>(
+    heap_caps_aligned_alloc(4, _config.height, MALLOC_CAP_INTERNAL));
+  memset(dec_train, 0, sizeof(dec_train));
+  if (!(dec_todo && dec_sweeps && dec_nsweeps)) return false;
+
   // ── Create the power driver for this board ──
   if (_config.power.tps_addr != -1) {
     printf("\n── PowerCtl Init ──\n");
@@ -700,18 +712,26 @@ void EPD_Painter::_paint_task_body() {
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
     uint32_t any_work = 0;
-    for (int row = 0; row < _config.height; row++) {
-      const uint8_t *pb_row = packed_paintbuffer + row * packed_row_bytes;
-      uint8_t *fbD_row = packed_fastbuffer  + row * packed_row_bytes;
-      uint8_t *fbL_row = packed_lightbuffer + row * packed_row_bytes;
-      uint8_t *sb_row  = packed_screenbuffer + row * packed_row_bytes;
+    if (_decision_engine) {
+      // Decision engine: C discovery — planes, masks, per-line todo words.
+      any_work = _decision_discover();
+    } else {
+      for (int row = 0; row < _config.height; row++) {
+        const uint8_t *pb_row = packed_paintbuffer + row * packed_row_bytes;
+        uint8_t *fbD_row = packed_fastbuffer  + row * packed_row_bytes;
+        uint8_t *fbL_row = packed_lightbuffer + row * packed_row_bytes;
+        uint8_t *sb_row  = packed_screenbuffer + row * packed_row_bytes;
 
-      bitmask[row] = epd_painter_ink_dual(pb_row, fbD_row, fbL_row, sb_row,
-                                          packed_row_bytes, &bitmask_light[row]);
-      any_work |= bitmask[row] | bitmask_light[row];
+        bitmask[row] = epd_painter_ink_dual(pb_row, fbD_row, fbL_row, sb_row,
+                                            packed_row_bytes, &bitmask_light[row]);
+        any_work |= bitmask[row] | bitmask_light[row];
+      }
     }
+    // Both engines feed the same per-line sweep lists (phase B: the fixed
+    // compatibility mapping — the July dual-plane layout, exactly).
+    _decision_batch_compat();
 #ifdef EPD_ASM_TIMING
-    printf("[paint_task] ink_dual (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
+    printf("[paint_task] ink discovery (all rows): %lld us\n", esp_timer_get_time() - _ink_t0);
 #endif
     xSemaphoreGive(_paint_buffer_sem);
 
@@ -754,33 +774,30 @@ void EPD_Painter::_paint_task_body() {
     int64_t _conv_total = 0;
     int _dbl_rows = 0;
 #endif
-    // A sweep = one staged 2bpp slot plane + its per-row chunk masks + the
-    // waveform table its 2-bit values index ([3][wf_len], 2-bit drive code
-    // per slot per pass). The engine ORs any number of sweeps into the row
+    // Decision -> train bindings for this paint (phase B: the 4-level
+    // compatibility library — apply(g) is the darker table's row g-1,
+    // remove(g) the lighter table's; id = (level << 1) | dir).
+    for (int g = 1; g <= 3; g++) {
+      dec_train[(g << 1) | 0] = dk_wf + (g - 1) * wf_len;
+      dec_train[(g << 1) | 1] = lt_wf + (g - 1) * wf_len;
+    }
+
+    // The pass loop consumes per-line sweep lists: a sweep = one staged
+    // 2bpp slot plane + a chunk mask + 3 decision ids naming the waveform
+    // train each slot indexes. The engine ORs a line's sweeps into the row
     // accumulator before the single latch; the k-way OR is safe because a
     // pixel belongs to exactly one sweep, so the others write float for it
-    // (see DECISION_ENGINE.md). Today's dark+light pair is the fixed
-    // 2-sweep case: draw-to trajectories in one plane, erase-from in the
-    // other, pixel-disjoint by construction.
-    struct Sweep {
-      const uint8_t  *plane;
-      const uint32_t *masks;
-      const uint8_t  *table;
-    };
-    const Sweep sweeps[] = {
-      { packed_fastbuffer,  bitmask,       dk_wf },
-      { packed_lightbuffer, bitmask_light, lt_wf },
-    };
-    constexpr int n_sweeps = sizeof(sweeps) / sizeof(sweeps[0]);
-
+    // (see DECISION_ENGINE.md). Phase B lists are the fixed dual-plane
+    // pair: apply-decisions in one sweep, remove-decisions in the other,
+    // pixel-disjoint by construction.
     for (uint8_t pass = 0; pass < wf_len; pass++) {
-      // Per-sweep broadcast bytes for this pass: code * 0x55 replicates a
-      // 2-bit drive code across the 4 pixels of a byte. Entry order is
-      // slot 3, 2, 1 (slot 0 = float and never drives).
-      uint8_t tbl[n_sweeps][3];
-      for (int s = 0; s < n_sweeps; s++)
-        for (int v = 0; v < 3; v++)
-          tbl[s][v] = (uint8_t)(sweeps[s].table[(2 - v) * wf_len + pass] * 0x55);
+      // Per-decision broadcast bytes for this pass: code * 0x55 replicates
+      // a 2-bit drive code across the 4 pixels of a byte. Ids 0/1 (level
+      // 0 = white) have no trains and always float.
+      uint8_t bcast[DEC_IDS];
+      bcast[0] = bcast[1] = 0;
+      for (int id = 2; id < DEC_IDS; id++)
+        bcast[id] = dec_train[id] ? (uint8_t)(dec_train[id][pass] * 0x55) : 0;
 
       for (int row = 0; row < _config.height; row++) {
 #ifdef EPD_ASM_TIMING
@@ -797,12 +814,15 @@ void EPD_Painter::_paint_task_body() {
         // starving its dose to nothing. Verified optically with the
         // debugRowTest() stripe probe.)
         memset(dma_buffer, 0x00, packed_row_bytes);
-        for (int s = 0; s < n_sweeps; s++) {
-          const uint8_t *plane_row = sweeps[s].plane + row * packed_row_bytes;
+        const LineSweep *ls = &dec_sweeps[row * DEC_MAX_SWEEPS];
+        const int n = dec_nsweeps[row];
+        for (int s = 0; s < n; s++) {
+          // Table entry order is slot 3, 2, 1 (slot 0 = float).
+          uint8_t tbl[3] = { bcast[ls[s].dec[2]], bcast[ls[s].dec[1]], bcast[ls[s].dec[0]] };
           if (s == 0)
-            epd_painter_convert_packed_fb_to_ink(plane_row, dma_buffer, packed_row_bytes, tbl[s], sweeps[s].masks[row]);
+            epd_painter_convert_packed_fb_to_ink(ls[s].plane_row, dma_buffer, packed_row_bytes, tbl, ls[s].mask);
           else
-            epd_painter_convert_packed_fb_to_ink_or(plane_row, dma_buffer, packed_row_bytes, tbl[s], sweeps[s].masks[row]);
+            epd_painter_convert_packed_fb_to_ink_or(ls[s].plane_row, dma_buffer, packed_row_bytes, tbl, ls[s].mask);
         }
 #ifdef EPD_ASM_TIMING
         _conv_total += esp_timer_get_time() - _conv_t0;

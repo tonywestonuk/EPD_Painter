@@ -1,0 +1,205 @@
+// =============================================================================
+// epd_painter_decision.cpp — the decision engine's discovery pass (phase B).
+//
+// C reference implementation; see DECISION_ENGINE.md for the design.
+//
+// Discovery reads the packed paintbuffer against the packed screenbuffer and
+// emits, per line: slot-encoded planes, chunk masks, a todo word of pending
+// decisions, and a sweep list for the pass loop. In phase B the batcher is
+// the 4-level compatibility mapping — apply-decisions in plane 0 (slot =
+// grey value), remove-decisions in plane 1 — which reproduces the July
+// dual-plane engine's output byte for byte. The SIMD ink_dual assembly
+// remains the default engine; this path is enabled with setDecisionEngine()
+// and cross-checked against the assembly with EPD_DECISION_VERIFY.
+//
+// Pixel model (unchanged from the dual-plane engine):
+//   dark  = new    where screen == 0        (drawn onto white ground)
+//   light = screen where new != screen      (erased toward white)
+//   screen' = new where drawn, 0 where erased, else unchanged
+// A grey-to-grey pixel erases this paint and draws the next (two-step);
+// collapsing that into one paint is phase C's batcher, not this one.
+// =============================================================================
+
+#include "EPD_Painter.h"
+#include <string.h>
+#include "esp_timer.h"
+
+// Define to run the C discovery and the SIMD assembly side by side each
+// paint and report mismatches on serial. The assembly's output drives the
+// panel; the C path is compared and discarded. Costs one extra row buffer
+// set and roughly doubles discovery time — a correctness harness, not a
+// mode to ship with.
+// #define EPD_DECISION_VERIFY
+
+extern "C" uint32_t epd_painter_ink_dual(const uint8_t *packed_paintbuffer,
+                                         uint8_t *packed_fastbuffer,
+                                         uint8_t *packed_lightbuffer,
+                                         uint8_t *packed_screenbuffer,
+                                         uint32_t length, uint32_t *maskL_out);
+
+// ---- SWAR helpers: 16 pixels (2-bit fields) per 32-bit word --------------
+
+// 01 in every field that is non-zero
+static inline uint32_t fieldNonzero(uint32_t v) {
+  return (v | (v >> 1)) & 0x55555555u;
+}
+// spread 01-per-field to 11-per-field
+static inline uint32_t fieldSpread(uint32_t m) {
+  return m | (m << 1);
+}
+
+// ---- one line -------------------------------------------------------------
+
+uint32_t EPD_Painter::_decision_discover_row(const uint8_t *pb_row,
+                                             uint8_t *fbD_row, uint8_t *fbL_row,
+                                             uint8_t *sb_row,
+                                             uint32_t *maskL_out,
+                                             uint32_t *todo_out) {
+  uint32_t maskD = 0, maskL = 0, todo = 0;
+  const int words = packed_row_bytes / 4;          // 16px per word
+  const uint32_t *pb = (const uint32_t *)pb_row;
+  uint32_t *fbD = (uint32_t *)fbD_row;
+  uint32_t *fbL = (uint32_t *)fbL_row;
+  uint32_t *sb  = (uint32_t *)sb_row;
+
+  // chunk = 64 px = 4 words = 16 bytes; mask bits count DOWN from bit 31
+  // (chunk 0 = bit 31), matching the assembly's rotating-mask convention.
+  // The light plane's stores are skipped for empty chunks (PSRAM — idle
+  // writes avoided), also matching the assembly: bytes there are stale
+  // don't-cares guarded by the mask.
+  for (int c = 0; c < words / 4; c++) {
+    uint32_t lbuf[4];
+    uint32_t anyD = 0, anyL = 0;
+    for (int i = 0; i < 4; i++) {
+      const int w = c * 4 + i;
+      const uint32_t nv = pb[w], sv = sb[w];
+      const uint32_t occupied = fieldSpread(fieldNonzero(sv)); // 11 where screen != 0
+      const uint32_t changed  = fieldSpread(fieldNonzero(nv ^ sv));
+      const uint32_t dark  = nv & ~occupied;                   // drawn onto white
+      const uint32_t light = sv & changed;                     // erased toward white
+      fbD[w]  = dark;
+      lbuf[i] = light;
+      sb[w]   = (sv & ~changed) | dark;
+      anyD |= dark;
+      anyL |= light;
+
+      // todo bits: walk the fields of the (rare) non-zero ink words.
+      // id = (level << 1) | dir; dir 0 = apply, 1 = remove.
+      if (dark | light) {
+        uint32_t d = dark, l = light;
+        while (d) { todo |= 1u << ((d & 3) << 1);       d >>= 2; }
+        while (l) { todo |= 1u << (((l & 3) << 1) | 1); l >>= 2; }
+      }
+    }
+    const uint32_t bit = 0x80000000u >> c;
+    if (anyD) maskD |= bit;
+    if (anyL) {
+      maskL |= bit;
+      fbL[c * 4 + 0] = lbuf[0];
+      fbL[c * 4 + 1] = lbuf[1];
+      fbL[c * 4 + 2] = lbuf[2];
+      fbL[c * 4 + 3] = lbuf[3];
+    }
+  }
+  // the field walk sets bogus bits for zero fields (level 0 has no
+  // decisions); clear ids 0 and 1
+  todo &= ~3u;
+
+  *maskL_out = maskL;
+  *todo_out  = todo;
+  return maskD;
+}
+
+// ---- whole frame ----------------------------------------------------------
+
+uint32_t EPD_Painter::_decision_discover() {
+  uint32_t any_work = 0;
+
+#ifdef EPD_DECISION_VERIFY
+  static uint32_t verify_paint = 0;
+  uint32_t mm_plane = 0, mm_mask = 0, mm_screen = 0, mm_todo_rows = 0;
+  static uint8_t c_fbD[240], c_fbL[240], c_sb[240];
+  int64_t t_c = 0, t_asm = 0;
+#endif
+
+  for (int row = 0; row < _config.height; row++) {
+    const uint8_t *pb_row = packed_paintbuffer  + row * packed_row_bytes;
+    uint8_t *fbD_row = packed_fastbuffer   + row * packed_row_bytes;
+    uint8_t *fbL_row = packed_lightbuffer  + row * packed_row_bytes;
+    uint8_t *sb_row  = packed_screenbuffer + row * packed_row_bytes;
+
+#ifdef EPD_DECISION_VERIFY
+    // C discovery on scratch copies; assembly on the real buffers (it is
+    // the engine of record while the C path is on probation). Plane
+    // scratch is seeded from the real buffers so chunks whose stores are
+    // legitimately skipped (stale don't-cares behind the mask) compare
+    // equal.
+    memcpy(c_sb,  sb_row,  packed_row_bytes);
+    memcpy(c_fbD, fbD_row, packed_row_bytes);
+    memcpy(c_fbL, fbL_row, packed_row_bytes);
+    uint32_t c_maskL, c_todo;
+    int64_t t0 = esp_timer_get_time();
+    uint32_t c_maskD = _decision_discover_row(pb_row, c_fbD, c_fbL, c_sb,
+                                              &c_maskL, &c_todo);
+    t_c += esp_timer_get_time() - t0;
+
+    t0 = esp_timer_get_time();
+    bitmask[row] = epd_painter_ink_dual(pb_row, fbD_row, fbL_row, sb_row,
+                                        packed_row_bytes, &bitmask_light[row]);
+    t_asm += esp_timer_get_time() - t0;
+
+    if (memcmp(c_fbD, fbD_row, packed_row_bytes) ||
+        memcmp(c_fbL, fbL_row, packed_row_bytes))       mm_plane++;
+    if (c_maskD != bitmask[row] || c_maskL != bitmask_light[row]) mm_mask++;
+    if (memcmp(c_sb, sb_row, packed_row_bytes))         mm_screen++;
+    uint32_t todo = c_todo;
+#else
+    uint32_t todo;
+    bitmask[row] = _decision_discover_row(pb_row, fbD_row, fbL_row, sb_row,
+                                          &bitmask_light[row], &todo);
+#endif
+
+    dec_todo[row] = todo;
+    any_work |= bitmask[row] | bitmask_light[row];
+  }
+
+#ifdef EPD_DECISION_VERIFY
+  printf("[decision verify] paint %lu: mismatch rows plane=%lu mask=%lu screen=%lu | C %lldus asm %lldus\n",
+         (unsigned long)verify_paint++, (unsigned long)mm_plane,
+         (unsigned long)mm_mask, (unsigned long)mm_screen,
+         (long long)t_c, (long long)t_asm);
+  (void)mm_todo_rows;
+#endif
+
+  return any_work;
+}
+
+// ---- phase B compatibility batcher ---------------------------------------
+// apply-decisions -> plane 0, remove-decisions -> plane 1, slot = grey
+// value: the slot-encoded planes ARE the dual-engine's ink planes, so this
+// mapping reproduces the July engine byte for byte. Shared by both engines
+// (after the SIMD ink_dual sweep or after _decision_discover()).
+
+void EPD_Painter::_decision_batch_compat() {
+  for (int row = 0; row < _config.height; row++) {
+    uint8_t n = 0;
+    LineSweep *ls = &dec_sweeps[row * DEC_MAX_SWEEPS];
+    if (bitmask[row]) {
+      ls[n].plane_row = packed_fastbuffer + row * packed_row_bytes;
+      ls[n].mask = bitmask[row];
+      ls[n].dec[0] = (1 << 1) | 0;   // slot1 = apply level 1
+      ls[n].dec[1] = (2 << 1) | 0;
+      ls[n].dec[2] = (3 << 1) | 0;
+      n++;
+    }
+    if (bitmask_light[row]) {
+      ls[n].plane_row = packed_lightbuffer + row * packed_row_bytes;
+      ls[n].mask = bitmask_light[row];
+      ls[n].dec[0] = (1 << 1) | 1;   // slot1 = remove level 1
+      ls[n].dec[1] = (2 << 1) | 1;
+      ls[n].dec[2] = (3 << 1) | 1;
+      n++;
+    }
+    dec_nsweeps[row] = n;
+  }
+}

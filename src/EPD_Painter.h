@@ -204,6 +204,12 @@ struct PowerCtlConfig {
 
   void setQuality(Quality quality);
 
+  // Select the paint engine: false (default) = SIMD dual-plane assembly,
+  // true = the decision engine's C discovery path (see DECISION_ENGINE.md).
+  // Phase B: both produce identical output on 4-level content; the C path
+  // exists to be verified against the assembly before it grows 16 levels.
+  void setDecisionEngine(bool on) { _decision_engine = on; }
+
   // Panel temperature in °C from the power PMIC's sensor (TPS65185 boards).
   // Returns EPD_PowerDriver::TEMP_UNAVAILABLE (-1000) if the board has no
   // sensor or begin() has not run yet.
@@ -257,6 +263,31 @@ private:
 
   uint32_t* bitmask = nullptr;        // per-row dark-plane chunk mask
   uint32_t* bitmask_light = nullptr;  // per-row light-plane chunk mask
+
+  // ---- Decision engine (see DECISION_ENGINE.md) ----
+  // A decision is a (grey level, direction) pair, id = (level << 1) | dir
+  // (dir 0 = apply, 1 = remove). Discovery fills per-line todo words and
+  // sweep lists; the pass loop consumes the lists generically. Phase B:
+  // 4-level compatibility — decisions 2..7, at most 2 sweeps per line.
+  static constexpr int DEC_MAX_SWEEPS = 2;   // grows in phase C
+  static constexpr int DEC_IDS        = 8;   // 4 levels x 2 directions
+  struct LineSweep {
+    const uint8_t *plane_row;  // slot-encoded 2bpp row
+    uint32_t       mask;       // chunk mask for this row
+    uint8_t        dec[3];     // decision id per slot 1..3 (0 = unused)
+  };
+  uint32_t  *dec_todo    = nullptr;  // per-line pending-decision words
+  LineSweep *dec_sweeps  = nullptr;  // [height * DEC_MAX_SWEEPS]
+  uint8_t   *dec_nsweeps = nullptr;  // per-line sweep count
+  const uint8_t *dec_train[DEC_IDS]; // decision id -> waveform train (wf_len codes)
+  // C discovery: paintbuffer vs screenbuffer -> planes, masks, todo, sweep
+  // lists; updates screenbuffer. Returns nonzero if any line has work.
+  uint32_t _decision_discover();
+  uint32_t _decision_discover_row(const uint8_t *pb_row, uint8_t *fbD_row,
+                                  uint8_t *fbL_row, uint8_t *sb_row,
+                                  uint32_t *maskL_out, uint32_t *todo_out);
+  void _decision_batch_compat();
+  bool _decision_engine = false;   // C discovery path off until phase C needs it
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
