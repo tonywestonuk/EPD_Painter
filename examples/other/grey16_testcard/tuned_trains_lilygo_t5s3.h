@@ -2,8 +2,10 @@
 // Tuned 20 July 2026 with the match-card method: each level's flat native
 // patch optically matched (flatbed scan) against a reference patch built
 // from only full-white and full-black pixels Bayer-dithered to density
-// g/15. Final verification: all 16 levels strictly monotonic, every native
-// patch within +/-4.5 scan units of its reference.
+// g/15. Tuned UNDER THE CONSTANT PASS PERIOD (15 ms NORMAL) — phase D's
+// dose-stabilisation fix — and cross-verified: strictly monotonic on both
+// the match card (max err 4.2 scan units) and the full-height staircase,
+// the content transfer test the pre-fix timing failed.
 //
 // Codes per pass: 0 float, 1 darken, 2 whiten.
 //
@@ -29,15 +31,15 @@ static const uint8_t TUNED16_LILYGO_T5S3_NORMAL[16][13] = {
   /* 1  (2,2)  */ {1,1,2,2,0,0,0,0,0,0,0,0,0},
   /* 2  (2,1)  */ {1,1,2,0,0,0,0,0,0,0,0,0,0},
   /* 3  (3,2)  */ {1,1,1,2,2,0,0,0,0,0,0,0,0},
-  /* 4  (2,0)  */ {1,1,0,0,0,0,0,0,0,0,0,0,0},
+  /* 4 (3,3,1) */ {1,1,1,2,2,2,1,0,0,0,0,0,0},
   /* 5  (4,2)  */ {1,1,1,1,2,2,0,0,0,0,0,0,0},
-  /* 6 (2,1,2) */ {1,1,2,1,1,0,0,0,0,0,0,0,0},
-  /* 7  (5,2)  */ {1,1,1,1,1,2,2,0,0,0,0,0,0},
-  /* 8  (6,2)  */ {1,1,1,1,1,1,2,2,0,0,0,0,0},
-  /* 9  (8,2)  */ {1,1,1,1,1,1,1,1,2,2,0,0,0},
-  /* 10 (6,2,1)*/ {1,1,1,1,1,1,2,2,1,0,0,0,0},
-  /* 11 (6,1)  */ {1,1,1,1,1,1,2,0,0,0,0,0,0},
-  /* 12 (6,1,1)*/ {1,1,1,1,1,1,2,1,0,0,0,0,0},
+  /* 6 (2,2,2) */ {1,1,2,2,1,1,0,0,0,0,0,0,0},
+  /* 7 (2,1,2) */ {1,1,2,1,1,0,0,0,0,0,0,0,0},
+  /* 8 (3,2,2) */ {1,1,1,2,2,1,1,0,0,0,0,0,0},
+  /* 9  (5,1)  */ {1,1,1,1,1,2,0,0,0,0,0,0,0},
+  /* 10(7,2,1) */ {1,1,1,1,1,1,1,2,2,1,0,0,0},
+  /* 11 (7,1)  */ {1,1,1,1,1,1,1,2,0,0,0,0,0},
+  /* 12(5,1,1) */ {1,1,1,1,1,2,1,0,0,0,0,0,0},
   /* 13 (11,1) */ {1,1,1,1,1,1,1,1,1,1,1,2,0},
   /* 14 (8,0)  */ {1,1,1,1,1,1,1,1,0,0,0,0,0},
   /* 15 (13,0) */ {1,1,1,1,1,1,1,1,1,1,1,1,1},

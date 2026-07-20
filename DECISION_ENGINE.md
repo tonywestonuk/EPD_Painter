@@ -151,6 +151,17 @@ per-call, so per-line tables cost nothing).
   pad each pass to a constant period (extend today's fixed inter-pass
   delay to "delay until fixed pass duration") so dose depends only on
   the trains, then tune under that timing.
+
+  **Implemented and verified 20 July 2026.** 16-grey passes pad to a
+  constant period (15 ms NORMAL / 19 ms HIGH; measured row loops run
+  4.8-7.0 ms depending on content, worst-case ~10.5 ms at 10 sweeps),
+  with the quality's settle floor preserved on overrun. Trains re-tuned
+  under the new timing (LilyGo T5 S3 GPS, NORMAL): strictly monotonic on
+  the match card (max err 4.2) AND on the full-height staircase — the
+  cross-content transfer test that failed before the fix. Remaining in
+  phase D: remove-train tuning, HIGH quality, temperature bands, the
+  M5PaperS3's own table, and a home for per-board 16-grey tables in the
+  preset system.
 - **Phase D — calibration**: scanner rig + dithertune extended to tune 32
   trains per board (HIGH first). Gate: optical match of all 16 levels
   against dither references.

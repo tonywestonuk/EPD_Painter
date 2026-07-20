@@ -295,6 +295,13 @@ private:
   static constexpr int DEC_MAX_SWEEPS16 = 10;  // 16-grey: ceil(30 decisions / 3)
   static constexpr int DEC_IDS          = 32;  // 16 levels x 2 directions
   static constexpr int DEC_WF_LEN16     = 13;  // train length (NORMAL/HIGH)
+  // 16-grey constant pass period (row loop + padding), per quality. A row
+  // converts k sweeps, so the row loop's duration varies with content —
+  // and pass duration IS the retention dose. Padding every pass to a
+  // fixed period makes dose depend only on the trains (phase D; see
+  // DECISION_ENGINE.md "dose is content-dependent").
+  static constexpr int DEC_PASS_US16_NORMAL = 15000;
+  static constexpr int DEC_PASS_US16_HIGH   = 19000;
   struct LineSweep {
     const uint8_t *plane_row;  // slot-encoded 2bpp row
     uint32_t       mask;       // chunk mask for this row

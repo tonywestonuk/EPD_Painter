@@ -896,7 +896,11 @@ void EPD_Painter::_paint_task_body() {
     // (see DECISION_ENGINE.md). Phase B lists are the fixed dual-plane
     // pair: apply-decisions in one sweep, remove-decisions in the other,
     // pixel-disjoint by construction.
+#ifdef EPD_GREY16_PASS_TIMING
+    int64_t _g16_rowloop_min = 0, _g16_rowloop_max = 0;
+#endif
     for (uint8_t pass = 0; pass < wf_len; pass++) {
+      const int64_t pass_t0 = esp_timer_get_time();
       // Per-decision broadcast bytes for this pass: code * 0x55 replicates
       // a 2-bit drive code across the 4 pixels of a byte. Ids 0/1 (level
       // 0 = white) have no trains and always float.
@@ -936,13 +940,38 @@ void EPD_Painter::_paint_task_body() {
         sendRow(row == 0, false, false);
       }
 
-     if (_config.quality == Quality::QUALITY_HIGH) {
+     if (_grey16) {
+        // Constant pass period: dose = time between a row's latches = the
+        // pass duration, and the row loop's length varies with content
+        // (sweep count). Pad to a fixed period so dose depends only on
+        // the trains — but never squeeze the inter-pass settle below the
+        // quality's floor. Trains are calibrated at this period.
+        const int64_t elapsed = esp_timer_get_time() - pass_t0;
+#ifdef EPD_GREY16_PASS_TIMING
+        if (pass == 0 || elapsed < _g16_rowloop_min) _g16_rowloop_min = elapsed;
+        if (elapsed > _g16_rowloop_max) _g16_rowloop_max = elapsed;
+#endif
+        const int64_t period = (_config.quality == Quality::QUALITY_HIGH)
+                                   ? DEC_PASS_US16_HIGH : DEC_PASS_US16_NORMAL;
+        const int64_t settle_floor =
+            (_config.quality == Quality::QUALITY_HIGH) ? 8000 : 4000;
+        int64_t pad = period - elapsed;
+        if (pad < settle_floor) pad = settle_floor;   // overrun: keep settle
+        EPD_DELAY_MS((uint32_t)((pad + 500) / 1000));
+      } else if (_config.quality == Quality::QUALITY_HIGH) {
         EPD_DELAY_MS(8);
       } else if (_config.quality == Quality::QUALITY_NORMAL) {
         EPD_DELAY_MS(4);
       }
       // QUALITY_FAST = No delay.
     }
+#ifdef EPD_GREY16_PASS_TIMING
+    if (_grey16)
+      printf("[grey16] pass row-loop %lld..%lld us (period %d us)\n",
+             (long long)_g16_rowloop_min, (long long)_g16_rowloop_max,
+             (int)(_config.quality == Quality::QUALITY_HIGH
+                       ? DEC_PASS_US16_HIGH : DEC_PASS_US16_NORMAL));
+#endif
 #ifdef EPD_ASM_TIMING
     printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
     printf("[paint_task] merged (mixed-chunk) rows: %d of %d\n", _dbl_rows, _config.height);
