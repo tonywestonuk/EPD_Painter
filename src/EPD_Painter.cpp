@@ -754,43 +754,56 @@ void EPD_Painter::_paint_task_body() {
     int64_t _conv_total = 0;
     int _dbl_rows = 0;
 #endif
+    // A sweep = one staged 2bpp slot plane + its per-row chunk masks + the
+    // waveform table its 2-bit values index ([3][wf_len], 2-bit drive code
+    // per slot per pass). The engine ORs any number of sweeps into the row
+    // accumulator before the single latch; the k-way OR is safe because a
+    // pixel belongs to exactly one sweep, so the others write float for it
+    // (see DECISION_ENGINE.md). Today's dark+light pair is the fixed
+    // 2-sweep case: draw-to trajectories in one plane, erase-from in the
+    // other, pixel-disjoint by construction.
+    struct Sweep {
+      const uint8_t  *plane;
+      const uint32_t *masks;
+      const uint8_t  *table;
+    };
+    const Sweep sweeps[] = {
+      { packed_fastbuffer,  bitmask,       dk_wf },
+      { packed_lightbuffer, bitmask_light, lt_wf },
+    };
+    constexpr int n_sweeps = sizeof(sweeps) / sizeof(sweeps[0]);
+
     for (uint8_t pass = 0; pass < wf_len; pass++) {
-      uint8_t lighter_wf[3] = {
-        (uint8_t)(lt_wf[2 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[1 * wf_len + pass] * 0x55),
-        (uint8_t)(lt_wf[0 * wf_len + pass] * 0x55)
-      };
-      uint8_t darker_wf[3] = {
-        (uint8_t)(dk_wf[2 * wf_len + pass] * 0x55),
-        (uint8_t)(dk_wf[1 * wf_len + pass] * 0x55),
-        (uint8_t)(dk_wf[0 * wf_len + pass] * 0x55)
-      };
+      // Per-sweep broadcast bytes for this pass: code * 0x55 replicates a
+      // 2-bit drive code across the 4 pixels of a byte. Entry order is
+      // slot 3, 2, 1 (slot 0 = float and never drives).
+      uint8_t tbl[n_sweeps][3];
+      for (int s = 0; s < n_sweeps; s++)
+        for (int v = 0; v < 3; v++)
+          tbl[s][v] = (uint8_t)(sweeps[s].table[(2 - v) * wf_len + pass] * 0x55);
 
       for (int row = 0; row < _config.height; row++) {
-        uint8_t *fbD_row = packed_fastbuffer  + row * packed_row_bytes;
-        uint8_t *fbL_row = packed_lightbuffer + row * packed_row_bytes;
-        const uint32_t mD   = bitmask[row];
-        const uint32_t mL   = bitmask_light[row];
-        const uint32_t both = mD & mL;
 #ifdef EPD_ASM_TIMING
         const int64_t _conv_t0 = esp_timer_get_time();
+        if (pass == 0 && (bitmask[row] & bitmask_light[row])) _dbl_rows++;
 #endif
-        // Masks are no longer complementary, so chunks with no work in
-        // either plane must be explicitly floated (zeroed) — convert skips
-        // them and would otherwise leave the previous row's drive data.
-        // Dark plane overwrites, light plane ORs on top: drive codes are
-        // per-pixel and the planes are pixel-disjoint, so both directions of
-        // a mixed chunk ride in ONE transmission with full retention dose.
-        // (Driving the row twice instead does NOT work — a second latch cuts
-        // the first data's retention from a full pass period to one ~30us
-        // row slot, starving its dose to nothing. Verified optically with
-        // the debugRowTest() stripe probe.)
+        // Chunks with no work in any sweep must be explicitly floated
+        // (zeroed) — convert skips them and would otherwise leave the
+        // previous row's drive data. The first sweep overwrites its active
+        // chunks, later sweeps OR on top: all of a line's ink rides in ONE
+        // transmission with full retention dose. (Driving the row once per
+        // sweep instead does NOT work — a second latch cuts the first
+        // data's retention from a full pass period to one ~30us row slot,
+        // starving its dose to nothing. Verified optically with the
+        // debugRowTest() stripe probe.)
         memset(dma_buffer, 0x00, packed_row_bytes);
-        epd_painter_convert_packed_fb_to_ink(fbD_row, dma_buffer, packed_row_bytes, darker_wf, mD);
-        epd_painter_convert_packed_fb_to_ink_or(fbL_row, dma_buffer, packed_row_bytes, lighter_wf, mL);
-#ifdef EPD_ASM_TIMING
-        if (pass == 0 && both) _dbl_rows++;
-#endif
+        for (int s = 0; s < n_sweeps; s++) {
+          const uint8_t *plane_row = sweeps[s].plane + row * packed_row_bytes;
+          if (s == 0)
+            epd_painter_convert_packed_fb_to_ink(plane_row, dma_buffer, packed_row_bytes, tbl[s], sweeps[s].masks[row]);
+          else
+            epd_painter_convert_packed_fb_to_ink_or(plane_row, dma_buffer, packed_row_bytes, tbl[s], sweeps[s].masks[row]);
+        }
 #ifdef EPD_ASM_TIMING
         _conv_total += esp_timer_get_time() - _conv_t0;
 #endif
