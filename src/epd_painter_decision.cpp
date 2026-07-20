@@ -203,3 +203,133 @@ void EPD_Painter::_decision_batch_compat() {
     dec_nsweeps[row] = n;
   }
 }
+
+// ===========================================================================
+// 16-grey discovery + batcher (phase C)
+//
+// The 4bpp paintbuffer is compared against the 4bpp screenbuffer and every
+// changed pixel yields exactly one decision: occupied pixels erase toward
+// white (remove(screen level), redrawn next paint — today's grey-to-grey
+// two-step, unchanged), bare pixels take their new level (apply(new)).
+// Decisions are batched into sweeps greedily in first-appearance order,
+// 3 per sweep, so a line using d distinct decisions costs ceil(d/3)
+// sweeps — the cost scales with the content, not the palette. Slot planes
+// stay 2bpp regardless of grey depth (they hold slot indices, not levels):
+// sweep 0 writes the internal fastbuffer, sweep 1 the lightbuffer, sweeps
+// 2..9 the PSRAM spill block. Chunks are floated (zeroed) lazily on the
+// first pixel that lands in them; untouched chunks stay outside the mask
+// as don't-cares, same convention as the assembly.
+// ===========================================================================
+
+uint8_t *EPD_Painter::_dec_plane_row(int sweep, int row) {
+  if (sweep == 0) return packed_fastbuffer  + (size_t)row * packed_row_bytes;
+  if (sweep == 1) return packed_lightbuffer + (size_t)row * packed_row_bytes;
+  return dec_spill +
+         ((size_t)(sweep - 2) * _config.height + row) * packed_row_bytes;
+}
+
+void EPD_Painter::_decision_discover16_row(int row) {
+  const int p4rb = packed_row_bytes * 2;             // 4bpp row bytes
+  const uint8_t *pb = packed4_paintbuffer  + (size_t)row * p4rb;
+  uint8_t       *sb = packed4_screenbuffer + (size_t)row * p4rb;
+  LineSweep *ls = &dec_sweeps16[row * DEC_MAX_SWEEPS16];
+
+  int8_t map[DEC_IDS];                               // id -> (sweep<<2)|slot
+  memset(map, -1, sizeof(map));
+  uint8_t *plane[DEC_MAX_SWEEPS16];
+  int ndec = 0, nsweeps = 0;
+  uint32_t todo = 0;
+
+  const int chunks = _config.width / 64;             // 64 px = 32 bytes at 4bpp
+  for (int c = 0; c < chunks; c++) {
+    const uint32_t *pw = (const uint32_t *)(pb + c * 32);
+    const uint32_t *sw = (const uint32_t *)(sb + c * 32);
+    uint32_t diff = 0;
+    for (int i = 0; i < 8; i++) diff |= pw[i] ^ sw[i];
+    if (!diff) continue;
+    const uint32_t cbit = 0x80000000u >> c;          // asm mask convention
+
+    for (int b = 0; b < 32; b++) {
+      const uint8_t nb = pb[c * 32 + b];
+      uint8_t sbyte = sb[c * 32 + b];
+      if (nb == sbyte) continue;
+      for (int h = 0; h < 2; h++) {                  // h=0: first px, high nibble
+        const int shift = h ? 0 : 4;
+        const uint8_t nv = (nb    >> shift) & 15;
+        const uint8_t sv = (sbyte >> shift) & 15;
+        if (nv == sv) continue;
+        const uint8_t id = sv ? (uint8_t)((sv << 1) | 1)   // remove(screen)
+                              : (uint8_t)(nv << 1);        // apply(new)
+        sbyte = sv ? (uint8_t)(sbyte & ~(15 << shift))     // erased -> white
+                   : (uint8_t)(sbyte | (nv << shift));     // drawn  -> nv
+
+        int m = map[id];
+        if (m < 0) {                                 // first sighting this row
+          const int s = ndec / 3, slot = ndec % 3;
+          if (slot == 0) {                           // open a new sweep
+            plane[s] = _dec_plane_row(s, row);
+            ls[s].plane_row = plane[s];
+            ls[s].mask = 0;
+            ls[s].dec[0] = ls[s].dec[1] = ls[s].dec[2] = 0;
+            nsweeps = s + 1;
+          }
+          ls[s].dec[slot] = id;
+          m = map[id] = (int8_t)((s << 2) | (slot + 1));
+          ndec++;
+          todo |= 1u << id;
+        }
+        const int s = m >> 2;
+        uint8_t *pl = plane[s];
+        if (!(ls[s].mask & cbit)) {                  // first touch: float chunk
+          memset(pl + c * 16, 0, 16);
+          ls[s].mask |= cbit;
+        }
+        const int x = c * 64 + b * 2 + h;
+        pl[x >> 2] |= (uint8_t)((m & 3) << ((3 - (x & 3)) * 2));
+      }
+      sb[c * 32 + b] = sbyte;
+    }
+  }
+  dec_todo[row]    = todo;
+  dec_nsweeps[row] = (uint8_t)nsweeps;
+}
+
+uint32_t EPD_Painter::_decision_discover16() {
+  uint32_t any_work = 0;
+  for (int row = 0; row < _config.height; row++) {
+    _decision_discover16_row(row);
+    any_work |= dec_nsweeps[row];
+  }
+  return any_work;
+}
+
+// ---- placeholder train library (phase C) ----------------------------------
+// Formula trains for NORMAL/HIGH's 13 passes; phase D replaces these with
+// scanner-calibrated tables. Dose is counted in half-pass units: a darken
+// pass is 2 units, and an odd dose gets one extra darken pass immediately
+// half-undone by a whiten in the following pass — the pixel-cap retention
+// physics gives roughly a half-step net. 15 levels map onto doses
+// round(g * 26 / 15) = 2..26, all distinct, so every level lands on its own
+// dose even though there are more levels than passes. Removes whiten from
+// pass 0 for long enough to erase their level with margin; overdriving
+// toward white is self-limiting (it is how clear() works).
+
+void EPD_Painter::_grey16_build_trains() {
+  memset(dec_trains16, 0, sizeof(dec_trains16));
+  for (int g = 1; g <= 15; g++) {
+    uint8_t *ap = dec_trains16[(g << 1) | 0];
+    uint8_t *rm = dec_trains16[(g << 1) | 1];
+
+    const int dose = (g * 2 * DEC_WF_LEN16 + 7) / 15;   // half-pass units
+    const int full = dose / 2;
+    for (int p = 0; p < full; p++) ap[p] = 1;           // darken
+    if ((dose & 1) && full + 1 < DEC_WF_LEN16) {
+      ap[full]     = 1;                                 // extra darken…
+      ap[full + 1] = 2;                                 // …half taken back
+    }
+
+    int wh = full + 3;                                  // erase with margin
+    if (wh > DEC_WF_LEN16) wh = DEC_WF_LEN16;
+    for (int p = 0; p < wh; p++) rm[p] = 2;             // whiten
+  }
+}

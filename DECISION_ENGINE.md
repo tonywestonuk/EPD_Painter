@@ -119,6 +119,38 @@ per-call, so per-line tables cost nothing).
   (placeholder trains interpolated from the 4-level tables). Gate: 16
   distinguishable greys on a test card, mechanism correct, colours
   approximate.
+
+  **DONE, gate passed 20 July 2026 (LilyGo T5 S3 GPS, NORMAL).** setGreyLevels(16)
+  + C discovery with a greedy first-appearance batcher (<=3 decisions per
+  sweep, up to 10 sweeps/line; sweep 0 = fastbuffer, 1 = lightbuffer, 2..9
+  spill to PSRAM). The formula train library flunked its first scan (dark
+  half non-monotonic), so phase D's match-card method was pulled forward:
+  reference patches of pure black/white pixels Bayer-dithered to density
+  g/15 on the top half of the glass, native levels below, closed-loop tuned
+  over serial (setDecisionTrain) against flatbed scans. Final card: all 16
+  levels strictly monotonic, every native within +/-4.5 scan units of its
+  reference. Tuned set in examples/other/grey16_testcard/.
+
+  What the glass taught us: a whiten pass takes back 20-30 units after a
+  short darken run (~10 near saturation) — never the formula's assumed half
+  step; darken passes 8..13 buy ~3 units total (saturation), so deep greys
+  cannot be spaced by run length; the fine knob is re-darkening after a
+  whiten (1,1,2,1,1-style patterns), which climbs from the lifted grey in
+  small fresh-response steps. Response drifts a few units over a long
+  session — final calibration stays phase D.
+
+  **Post-gate finding — dose is content-dependent.** The tuned ladder is
+  strictly monotonic on the match card but shows a tie and one inversion
+  on the full-height staircase, top and bottom halves alike, warm or
+  cold. The remaining variable is frame time: a pass's duration is the
+  sum of per-row conversion times, and rows convert k sweeps — so a
+  content change that alters sweep counts alters every pixel's retention
+  dose (match card: half the rows are 1-sweep; staircase: all rows are
+  ~6-sweep; ~20% dose difference). The July retention physics, resurfaced
+  at the architecture level. Phase D fix, before per-board calibration:
+  pad each pass to a constant period (extend today's fixed inter-pass
+  delay to "delay until fixed pass duration") so dose depends only on
+  the trains, then tune under that timing.
 - **Phase D — calibration**: scanner rig + dithertune extended to tune 32
   trains per board (HIGH first). Gate: optical match of all 16 levels
   against dither references.

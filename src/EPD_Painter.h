@@ -210,6 +210,28 @@ struct PowerCtlConfig {
   // exists to be verified against the assembly before it grows 16 levels.
   void setDecisionEngine(bool on) { _decision_engine = on; }
 
+  // 16-grey mode (decision engine phase C — see DECISION_ENGINE.md).
+  // levels = 4 (default) or 16. While 16-grey is on, paint() reads the 8bpp
+  // canvas as level codes 0..15 (0 = white … 15 = black; use dither16() for
+  // greyscale sources) and paintPacked()/unpaintPacked() are refused — the
+  // packed 2bpp path stays a 4-level feature. NORMAL and HIGH only: FAST's
+  // 7 undelayed passes lack the dose resolution, so the call fails while
+  // quality is FAST. First enable allocates the 4bpp state and spill slot
+  // planes (~1.6 MB PSRAM). The physical screen state is carried across the
+  // switch in both directions, so ghost tracking survives without a clear.
+  // Call after begin(). Returns false on refusal or allocation failure.
+  bool setGreyLevels(int levels);
+
+  // Override one 16-grey decision train (id = (level << 1) | dir, dir 0 =
+  // apply / 1 = remove; train = DEC_WF_LEN16 drive codes). The calibration
+  // rig's hook: probe sketches load candidate trains and the scanner
+  // measures what the glass actually does with them. Only meaningful after
+  // setGreyLevels(16) has built the default library.
+  void setDecisionTrain(uint8_t id, const uint8_t *train) {
+    if (id >= 2 && id < DEC_IDS && train)
+      for (int p = 0; p < DEC_WF_LEN16; p++) dec_trains16[id][p] = train[p];
+  }
+
   // Panel temperature in °C from the power PMIC's sensor (TPS65185 boards).
   // Returns EPD_PowerDriver::TEMP_UNAVAILABLE (-1000) if the board has no
   // sensor or begin() has not run yet.
@@ -269,8 +291,10 @@ private:
   // (dir 0 = apply, 1 = remove). Discovery fills per-line todo words and
   // sweep lists; the pass loop consumes the lists generically. Phase B:
   // 4-level compatibility — decisions 2..7, at most 2 sweeps per line.
-  static constexpr int DEC_MAX_SWEEPS = 2;   // grows in phase C
-  static constexpr int DEC_IDS        = 8;   // 4 levels x 2 directions
+  static constexpr int DEC_MAX_SWEEPS   = 2;   // 4-level compat sweep lists
+  static constexpr int DEC_MAX_SWEEPS16 = 10;  // 16-grey: ceil(30 decisions / 3)
+  static constexpr int DEC_IDS          = 32;  // 16 levels x 2 directions
+  static constexpr int DEC_WF_LEN16     = 13;  // train length (NORMAL/HIGH)
   struct LineSweep {
     const uint8_t *plane_row;  // slot-encoded 2bpp row
     uint32_t       mask;       // chunk mask for this row
@@ -288,6 +312,22 @@ private:
                                   uint32_t *maskL_out, uint32_t *todo_out);
   void _decision_batch_compat();
   bool _decision_engine = false;   // C discovery path off until phase C needs it
+
+  // ---- 16-grey mode (phase C) ----
+  // 4bpp desired/physical state, spill slot planes for sweeps 2..9 (sweep 0
+  // = fastbuffer, sweep 1 = lightbuffer), wide sweep lists, and a formula
+  // train library (placeholder — calibration is phase D). All PSRAM,
+  // allocated lazily on the first setGreyLevels(16).
+  uint8_t   *packed4_paintbuffer  = nullptr;  // w*h/2
+  uint8_t   *packed4_screenbuffer = nullptr;  // w*h/2
+  uint8_t   *dec_spill            = nullptr;  // (DEC_MAX_SWEEPS16-2) slot planes
+  LineSweep *dec_sweeps16         = nullptr;  // [height * DEC_MAX_SWEEPS16]
+  uint8_t    dec_trains16[DEC_IDS][DEC_WF_LEN16];
+  bool       _grey16 = false;
+  uint32_t _decision_discover16();
+  void _decision_discover16_row(int row);
+  uint8_t *_dec_plane_row(int sweep, int row);
+  void _grey16_build_trains();
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
