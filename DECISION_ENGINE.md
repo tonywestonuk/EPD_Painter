@@ -90,6 +90,21 @@ the row accumulator + OR + single-latch structure, sendRow timing, DMA,
 LCD_CAM, the delta principle, per-row broadcast of tables (already
 per-call, so per-line tables cost nothing).
 
+## Scope: where the wins land
+
+- **Video (paintPacked)**: frames arrive pre-packed 2bpp, quantised at
+  encode time, dithered across all 4 levels — up to 6 decisions/line, 2
+  sweeps, today's price. The player does not get faster; it is already at
+  the architecture's happy point.
+- **True 1-bit content** (e.g. the Mac emulator): 2 decisions, 1 sweep —
+  a real but modest speedup on the conversion half of the frame.
+- **16 greys**: NORMAL and HIGH only. FAST's 7 undelayed passes lack the
+  dose resolution for 16 honest levels regardless of batching — the last
+  stretch past ~10 levels needs mixed-polarity trains plus inter-pass
+  settling time, which is part of the dose (see the EPD_Painter2
+  measurements). FAST remains the 4-level speed mode. Expected 16-grey
+  NORMAL full-screen paint: roughly the 100-150 ms class.
+
 ## Roadmap
 
 - **Phase A — plumbing** (this branch): pass loop iterates a generic sweep
