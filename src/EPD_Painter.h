@@ -354,12 +354,16 @@ struct PowerCtlConfig {
   // (false) disables for release/video builds.
   void setStateGuard(bool on) { _sb_guard_on = on; _sb_guard_valid = false; }
 
-  // Idle panel power-off (the 1 Hz guard task powers rails down ~5 s
-  // after the last paint; the next paint powers them back up). false =
-  // keep the rails up between paints — field-debug / mitigation switch:
-  // idle power transitions are suspected of disturbing glass state that
-  // the screenbuffer never learns about (un-erasable ghosts).
-  void setIdlePowerOff(bool on) { _idle_power_off = on; }
+  // Idle panel power-off: rails power down after `seconds` without a
+  // paint (next paint powers them back up); 0 keeps rails up forever.
+  // Each rail cycle physically disturbs the glass a little in a
+  // content-shaped way the screenbuffer never learns about (proven on
+  // magitrac: sbhits=0 while ghosts accumulated, one power cycle per
+  // ~15 s of status-flap repaints). The old 5 s default turned busy-ish
+  // apps into power-cycle factories; 60 s keeps active sessions powered
+  // while a truly idle device still sleeps.
+  void setIdlePowerOff(bool on) { _idle_timeout_s = on ? 60 : 0; }
+  void setIdleTimeout(int seconds) { _idle_timeout_s = seconds; }
 
   void setAutoShutdown(bool v) { _autoShutdown = v; }
   EPD_PainterShutdown* shutdown() { return _shutdown; }
@@ -477,14 +481,13 @@ private:
   // ---- screenbuffer state guard ----
   bool     _sb_guard_on = true;
   bool     _sb_guard_valid = false;
-  uint32_t _sb_guard = 0;
+  uint8_t *_sb_shadow = nullptr; // full copy: fingerprints foreign writes
   uint32_t _sb_guard_hits = 0;   // retained: external screenbuffer writes
   uint32_t _tpl_trip_hits = 0;   // retained: overlay active / bad pointers
-  uint32_t _sb_checksum() const;
   void     _sb_guard_update();
   void     _sb_guard_check();
 
-  bool _idle_power_off = true;
+  int _idle_timeout_s = 60;
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
@@ -510,6 +513,7 @@ private:
   // ---- Internal helpers ----
   void powerOn();
   void powerOff();
+  void _pushRow();   // transmit-only row: flush the source shift chain
   bool autoDetectBoard();
   // noAdvance: pulse LE to latch the previously transmitted data onto the
   // source outputs but do NOT clock CKV — the gate stays on the current row.
@@ -531,7 +535,7 @@ private:
       initOnce(d);
       xSemaphoreTake(power_mtx, portMAX_DELAY);
       if (state == 0) d.powerOn();
-      state = 5;
+      state = d._idle_timeout_s;
       xSemaphoreGive(power_mtx);
     }
 
@@ -558,7 +562,7 @@ private:
       for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         xSemaphoreTake(power_mtx, portMAX_DELAY);
-        if (state > 0 && owner->_idle_power_off) {
+        if (state > 0 && owner->_idle_timeout_s > 0) {
           state--;
           if (state == 0) owner->powerOff();
         }

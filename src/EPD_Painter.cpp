@@ -667,6 +667,23 @@ bool EPD_Painter::end() {
 // =============================================================================
 // Power control
 // =============================================================================
+// Transmit one row of the current dma_buffer through the source shift
+// chain with NO latch and NO gate clock — data passes through and is
+// never driven. Used to flush the chain at power-on.
+void EPD_Painter::_pushRow() {
+  uint32_t spin = 0;
+  while (LCD_CAM.lcd_user.lcd_start && ++spin < 200000) {}
+  if (LCD_CAM.lcd_user.lcd_start) return;
+  dma_descriptor_t *desc;
+  if (dma_buffer == dma_buffer1) { desc = &dma_desc1; dma_buffer = dma_buffer2; }
+  else                           { desc = &dma_desc2; dma_buffer = dma_buffer1; }
+  LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
+  gdma_start(dma_chan, (intptr_t)desc);
+  LCD_CAM.lcd_user.lcd_start = 1;
+  spin = 0;
+  while (LCD_CAM.lcd_user.lcd_start && ++spin < 200000) {}
+}
+
 void EPD_Painter::powerOn() {
   printf("[EPD] panel power ON\n");
   _pin_le->set(false);
@@ -679,6 +696,20 @@ void EPD_Painter::powerOn() {
   // waveform band for the drive that's about to happen.
   selectWaveformsForTemperature();
 
+  // Flush the source shift chain. After a rail cycle the chain can hold
+  // stale drive data at a variable offset — the first frame's rows then
+  // land shifted a few pixels left/right (seen as thin ghost lines on a
+  // square's edge, and magitrac's misaligned note ghosts). Two rows of
+  // zeros pushed through with no latch leave it clean, aligned, and
+  // full of float codes — exactly the state v1.1.0's per-paint closing
+  // scan used to guarantee.
+  if (dma_buffer) {
+    memset(dma_buffer1, 0x00, packed_row_bytes);
+    memset(dma_buffer2, 0x00, packed_row_bytes);
+    _pushRow();
+    _pushRow();
+  }
+
   _pin_spv->set(false);
   _pin_ckv->set(false);
   EPD_DELAY_US(1);
@@ -690,6 +721,7 @@ void EPD_Painter::powerOff() {
   printf("[EPD] panel power OFF\n");
   _powerDriver->powerOff();
 }
+
 
 // Pick the waveform table for the current panel temperature. Called at every
 // panel power-on so a device cooling or warming in the field re-selects
@@ -1260,34 +1292,58 @@ void EPD_Painter::_paint_task_body() {
 // than the painted state that was left in PSRAM.
 // =============================================================================
 // ---- screenbuffer state guard (see header) --------------------------------
-uint32_t EPD_Painter::_sb_checksum() const {
-  const uint8_t *sb = _grey16 ? packed4_screenbuffer : packed_screenbuffer;
-  if (!sb) return 0;
-  const size_t words =
-      (size_t)_config.width * _config.height / (_grey16 ? 2 : 4) / 4;
-  const uint32_t *w = (const uint32_t *)sb;
-  uint32_t sum = 0;
-  for (size_t i = 0; i < words; i++) sum += w[i] * 2654435761u;
-  return sum;
-}
+// Full shadow copy: on mismatch we fingerprint the foreign write — where
+// it landed, how much, and what the bytes look like (ASCII = a string
+// overflow, structured data = someone's buffer).
 
 void EPD_Painter::_sb_guard_update() {
   if (!_sb_guard_on) return;
-  _sb_guard = _sb_checksum();
+  const uint8_t *sb = _grey16 ? packed4_screenbuffer : packed_screenbuffer;
+  if (!sb) return;
+  const size_t bytes =
+      (size_t)_config.width * _config.height / (_grey16 ? 2 : 4);
+  if (!_sb_shadow)
+    _sb_shadow = (uint8_t *)heap_caps_malloc(
+        (size_t)_config.width * _config.height / 2, MALLOC_CAP_SPIRAM);
+  if (!_sb_shadow) { _sb_guard_on = false; return; }
+  memcpy(_sb_shadow, sb, bytes);
   _sb_guard_valid = true;
 }
 
 void EPD_Painter::_sb_guard_check() {
-  if (!_sb_guard_on || !_sb_guard_valid) return;
-  if (_sb_checksum() != _sb_guard) {
-    _sb_guard_hits++;
-    printf("[EPD_Painter] CORRUPTION: screenbuffer changed BETWEEN drives "
-           "— external write (heap overflow elsewhere?). int free=%u "
-           "largest=%u psram free=%u\n",
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  if (!_sb_guard_on || !_sb_guard_valid || !_sb_shadow) return;
+  const uint8_t *sb = _grey16 ? packed4_screenbuffer : packed_screenbuffer;
+  if (!sb) return;
+  const size_t bytes =
+      (size_t)_config.width * _config.height / (_grey16 ? 2 : 4);
+  if (memcmp(_sb_shadow, sb, bytes) == 0) return;
+
+  _sb_guard_hits++;
+  size_t first = 0, last = 0, count = 0;
+  for (size_t i = 0; i < bytes; i++) {
+    if (_sb_shadow[i] != sb[i]) {
+      if (!count) first = i;
+      last = i;
+      count++;
+    }
   }
+  printf("[EPD_Painter] CORRUPTION #%lu: foreign write into screenbuffer "
+         "(%p): offsets %u..%u, %u bytes changed. int free=%u largest=%u\n",
+         (unsigned long)_sb_guard_hits, sb, (unsigned)first, (unsigned)last,
+         (unsigned)count,
+         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  const size_t dump = (bytes - first < 32) ? bytes - first : 32;
+  printf("[EPD_Painter]   was:");
+  for (size_t i = 0; i < dump; i++) printf(" %02x", _sb_shadow[first + i]);
+  printf("\n[EPD_Painter]   now:");
+  for (size_t i = 0; i < dump; i++) printf(" %02x", sb[first + i]);
+  printf("\n[EPD_Painter]   txt: ");
+  for (size_t i = 0; i < dump; i++) {
+    const uint8_t c = sb[first + i];
+    printf("%c", (c >= 32 && c < 127) ? c : '.');
+  }
+  printf("\n");
 }
 
 void EPD_Painter::clearBuffers() {
@@ -1408,12 +1464,9 @@ void EPD_Painter::clear(const Rect* rects, int num_rects, ClearMode mode) {
 
   const bool partial = (rects != nullptr && num_rects > 0);
 
-  // A full clear would erase the template with whatever quality happens
-  // to be current and then scrub it rail-to-rail — release it properly
-  // first (charge-matched unpaint at its own quality). Partial clears
-  // leave the template alone: the overlay repaints any protected pixels
-  // a rect tries to blank, which is exactly what "protected" means.
-  if (_has_template && !partial) releaseTemplate();
+  // NOTE (Tony, ghost hunt): clear() no longer auto-releases an active
+  // template — a template now SURVIVES a full clear (the overlay simply
+  // re-drives it on the next paint). Apps release explicitly.
 
   PanelPowerGuard guard(*this);
 
