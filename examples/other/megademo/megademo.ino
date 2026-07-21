@@ -101,15 +101,16 @@ static void screenIntro(uint32_t ms) {
   const uint32_t t0 = millis();
   int sx = W;                       // scroller x
   for (uint32_t f = 0; millis() - t0 < ms; f++) {
-    // copper bars: horizontal grey bands drifting down
-    for (int y = 0; y < H; y++) {
-      const uint8_t v = sinT[((y * 2) - f * 6) & 255];
-      const uint8_t band = (v > 208) ? 2 : (v > 176) ? 1 : 0;
-      memset(fb + (size_t)y * W, band, W);
-    }
-    // bouncing logo with a shadow pass
+    // EXPERIMENT: no copper bars — plain white ground, bouncing title.
+    // Does the descent artifact survive without the bars' downward drift?
+    memset(fb, 0, (size_t)W * H);
     const int by = 120 + (abs((int)(f * 7 % 220) - 110) * 100) / 110 - 50;
-    drawTextCentred("EPD_PAINTER", by + 6, 10, 2);
+    // No drop-shadow: the shadow below the text made every descent plough
+    // black letters into their own grey — a grey->grey two-step (erase to
+    // white this paint, redraw next) punching white holes through the
+    // strokes. Ascent only ran the shadow into old text: same physics,
+    // invisible contrast. Tony spotted it. Pure black on white is
+    // single-step in both directions.
     drawTextCentred("EPD_PAINTER", by, 10, 3);
     drawTextCentred("M E G A D E M O", by + 100, 4, 3);
     // sine scroller along the bottom
@@ -125,70 +126,123 @@ static void screenIntro(uint32_t ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Screen 2 — BOING. The ball. A grid. An fps counter earning its keep.
+// Screen 2 — BOING. The ball, promoted to the decision engine: true 3D in
+// a perspective room, 16-grey shaded checker sphere, gravity bounce and a
+// floor shadow that softens with height. NORMAL mode, ~4 fps — e-paper
+// doing something no e-paper demo has business doing.
 // ---------------------------------------------------------------------------
-static uint8_t *ballLat, *ballLon;   // per-pixel sphere coords, 255 = outside
-static const int BALLR = 110;           // ball radius
+static uint8_t *ballLat, *ballLon, *ballShade;  // sphere LUTs, 255 = outside
+static const int BALLR = 110;                   // LUT radius (native size)
 
 static void ballInit() {
   const int D = BALLR * 2;
-  ballLat = (uint8_t *)heap_caps_malloc(D * D, MALLOC_CAP_SPIRAM);
-  ballLon = (uint8_t *)heap_caps_malloc(D * D, MALLOC_CAP_SPIRAM);
+  ballLat   = (uint8_t *)heap_caps_malloc(D * D, MALLOC_CAP_SPIRAM);
+  ballLon   = (uint8_t *)heap_caps_malloc(D * D, MALLOC_CAP_SPIRAM);
+  ballShade = (uint8_t *)heap_caps_malloc(D * D, MALLOC_CAP_SPIRAM);
   for (int dy = -BALLR; dy < BALLR; dy++)
     for (int dx = -BALLR; dx < BALLR; dx++) {
       const int i = (dy + BALLR) * D + (dx + BALLR);
       const float r2 = (float)(dx * dx + dy * dy) / (BALLR * BALLR);
       if (r2 >= 1.0f) { ballLat[i] = 255; continue; }
-      const float z = sqrtf(1.0f - r2);
-      ballLat[i] = (uint8_t)((asinf((float)dy / BALLR) / M_PI + 0.5f) * 127);
-      ballLon[i] = (uint8_t)((atan2f((float)dx / BALLR, z) / M_PI + 0.5f) * 127);
+      const float z  = sqrtf(1.0f - r2);
+      const float nx = (float)dx / BALLR, ny = (float)dy / BALLR;
+      ballLat[i] = (uint8_t)((asinf(ny) / M_PI + 0.5f) * 127);
+      ballLon[i] = (uint8_t)((atan2f(nx, z) / M_PI + 0.5f) * 127);
+      float lit = -0.45f * nx - 0.60f * ny + 0.66f * z;   // light up-left-front
+      if (lit < 0) lit = 0;
+      ballShade[i] = (uint8_t)(lit * 255.0f);
     }
 }
 
 static void screenBoing(uint32_t ms) {
   Serial.printf("[demo] screenBoing t=%lu\n", millis());
-  modeFast4();
+  modeGrey16();
   epd.clear();
+  epd.clear();   // twice: lift the FAST screen's ghost before grey work
   if (!ballLat) ballInit();
+  const int HOR = H / 2 - 60;                 // horizon
+  const int NEARY = H - 26;                   // nearest floor edge
+  auto groundY = [&](float z) { return (int)(NEARY - z * (NEARY - (HOR + 18))); };
+  float wx = -0.4f, vx = 0.13f;               // world x, -1..1
+  float hgt = 240, vh = 0;                    // height above floor (px)
+  float zp = 0.1f, vz = 0.06f;                // depth, 0 near .. 1 far
   const uint32_t t0 = millis();
-  uint32_t frames = 0, lastT = t0;
-  float bx = W / 2, by = H / 2, vx = 11, vy = 9;
-  char fpsTxt[24] = "-- FPS";
-  for (uint32_t f = 0; millis() - t0 < ms; f++, frames++) {
-    // background: sparse grid (the classic purple grid, in spirit)
+  uint32_t frames = 0;
+  char fpsTxt[20] = "";
+  while (millis() - t0 < ms) {
+    frames++;
     memset(fb, 0, (size_t)W * H);
-    for (int y = 0; y < H; y += 60)
-      memset(fb + (size_t)y * W, 1, W);
-    for (int x = 0; x < W; x += 60)
-      for (int y = 0; y < H; y++) fb[(size_t)y * W + x] = 1;
-    // ball
-    bx += vx; by += vy;
-    if (bx < BALLR)     { bx = BALLR;     vx = -vx; }
-    if (bx > W - BALLR) { bx = W - BALLR; vx = -vx; }
-    if (by < BALLR)     { by = BALLR;     vy = -vy; }
-    if (by > H - BALLR) { by = H - BALLR; vy = -vy; }
-    const int cx = (int)bx, cy = (int)by, D = BALLR * 2;
-    const uint8_t rot = (uint8_t)(f * 3);
-    for (int dy = -BALLR; dy < BALLR; dy++) {
-      uint8_t *row = fb + (size_t)(cy + dy) * W;
-      const uint8_t *latR = ballLat + (dy + BALLR) * D;
-      const uint8_t *lonR = ballLon + (dy + BALLR) * D;
-      for (int dx = -BALLR; dx < BALLR; dx++) {
-        const uint8_t lat = latR[dx + BALLR];
-        if (lat == 255) continue;
-        const uint8_t cell = ((lat >> 4) ^ ((uint8_t)(lonR[dx + BALLR] + rot) >> 4)) & 1;
-        row[cx + dx] = cell ? 3 : 0;
+    // floor: depth rulings pack toward the horizon...
+    for (int i = 0; i <= 8; i++) {
+      const int y = groundY(sqrtf(i / 8.0f));
+      memset(fb + (size_t)y * W, 5, W);
+      memset(fb + (size_t)(y + 1) * W, 5, W);
+    }
+    // ...and converging rails toward the vanishing point
+    for (int i = -6; i <= 6; i++) {
+      const int xn = W / 2 + i * 130;         // spacing at the near edge
+      for (int y = HOR + 18; y <= NEARY; y++) {
+        const float f = (float)(y - HOR) / (NEARY - HOR);
+        const int xx = W / 2 + (int)((xn - W / 2) * f);
+        if (xx >= 0 && xx < W) fb[(size_t)y * W + xx] = 5;
       }
     }
-    // captions
-    drawText("DELTA ENGINE:", 20, 20, 3, 3);
-    drawText("ONLY CHANGED PIXELS HIT THE GLASS", 20, 50, 2, 3);
-    if (millis() - lastT > 2000) {
-      snprintf(fpsTxt, sizeof(fpsTxt), "%lu FPS",
-               (unsigned long)(frames * 1000 / (millis() - t0)));
-      lastT = millis();
+    memset(fb + (size_t)HOR * W, 5, W);       // horizon line
+    // physics
+    wx += vx; if (wx < -1) { wx = -1; vx = -vx; } if (wx > 1) { wx = 1; vx = -vx; }
+    zp += vz; if (zp < 0)  { zp = 0;  vz = -vz; } if (zp > 1) { zp = 1; vz = -vz; }
+    vh -= 12; hgt += vh;
+    if (hgt < 0) { hgt = 0; vh = 64; }        // steady boing
+    const float s = 1.0f - 0.52f * zp;        // perspective scale
+    const int r  = (int)(96 * s);
+    const int bx = W / 2 + (int)(wx * (W / 2 - 160) * (1.0f - 0.30f * zp));
+    const int gy = groundY(zp);
+    const int cy = gy - r - (int)(hgt * s);
+    // shadow: bigger and lighter the higher the ball
+    {
+      const int rx = r - 8 + (int)(hgt * 0.06f);
+      const int ry = rx / 3;
+      const uint8_t lvl = (uint8_t)(9 - min(5, (int)(hgt / 55)));
+      for (int dy = -ry; dy <= ry; dy++) {
+        const int y = gy - 6 + dy;
+        if (y < 0 || y >= H) continue;
+        const int hw = (int)(rx * sqrtf(1.0f - (float)(dy * dy) / (ry * ry)));
+        uint8_t *row = fb + (size_t)y * W;
+        for (int dx = -hw; dx <= hw; dx++) {
+          const int xx = bx + dx;
+          if (xx >= 0 && xx < W) row[xx] = lvl;
+        }
+      }
     }
-    drawText(fpsTxt, W - 180, 20, 3, 3);
+    // ball: sample the native-size LUTs at the perspective radius
+    const uint8_t rot = (uint8_t)(frames * 6);
+    const int D = BALLR * 2;
+    for (int sy = -r; sy <= r; sy++) {
+      const int y = cy + sy;
+      if (y < 0 || y >= H) continue;
+      uint8_t *row = fb + (size_t)y * W;
+      const int ly = (sy * BALLR) / r + BALLR;
+      const uint8_t *latR = ballLat   + ly * D;
+      const uint8_t *lonR = ballLon   + ly * D;
+      const uint8_t *shdR = ballShade + ly * D;
+      for (int sx = -r; sx <= r; sx++) {
+        const int xx = bx + sx;
+        if (xx < 0 || xx >= W) continue;
+        const int lx = (sx * BALLR) / r + BALLR;
+        const uint8_t lat = latR[lx];
+        if (lat == 255) continue;
+        const uint8_t shade = shdR[lx];
+        const uint8_t cell = ((lat >> 4) ^ (uint8_t)((uint8_t)(lonR[lx] + rot) >> 4)) & 1;
+        row[xx] = cell ? (uint8_t)(15 - (shade * 6) / 256)   // dark squares  9..15
+                       : (uint8_t)(8 - (shade * 6) / 256);   // light squares 2..8
+      }
+    }
+    drawTextCentred("THE BALL. NOW IN 16 GREYS.", 16, 4, 15);
+    drawTextCentred("TRUE 3D * NORMAL MODE * DECISION ENGINE", 58, 2, 10);
+    if (frames % 8 == 0)
+      snprintf(fpsTxt, sizeof(fpsTxt), "%.1f FPS",
+               frames * 1000.0f / (millis() - t0 + 1));
+    drawText(fpsTxt, 16, H - 30, 2, 10);
     epd.paint(fb);
   }
 }
@@ -252,6 +306,17 @@ static void screenStars(uint32_t ms) {
   Serial.printf("[demo] screenStars t=%lu\n", millis());
   modeFast4();
   epd.clear();
+  // Black stars on WHITE space — trail physics: a re-driven pixel lands
+  // deeper than a once-driven one (fresh-response), so dark grounds show
+  // trails that no amount of pre-saturation cures (the extra depth
+  // relaxes over seconds and the contrast re-emerges). White is the one
+  // state that cannot show this: overdriven white saturates — you cannot
+  // get whiter than white — so re-whitened trail pixels vanish into the
+  // ground by physics, not by tuning. A couple of style flashes first.
+  for (int i = 0; i < 2; i++) {
+    memset(fb, 3, (size_t)W * H); epd.paint(fb);
+    memset(fb, 0, (size_t)W * H); epd.paint(fb);
+  }
   struct Star { int16_t x, y; uint16_t z; };
   static Star st[220];
   for (int i = 0; i < 220; i++)
@@ -259,20 +324,23 @@ static void screenStars(uint32_t ms) {
               (uint16_t)random(64, 1024) };
   const uint32_t t0 = millis();
   while (millis() - t0 < ms) {
-    memset(fb, 3, (size_t)W * H);          // space is black
+    memset(fb, 0, (size_t)W * H);          // white space: trails clamp away
     for (int i = 0; i < 220; i++) {
       st[i].z -= 14;
       if (st[i].z < 32) st[i].z = 1024;
       const int sx = W / 2 + st[i].x * 256 / st[i].z;
       const int sy = H / 2 + st[i].y * 256 / st[i].z;
-      for (int dy = 0; dy < 10; dy++)      // big white 10x10 stars
+      for (int dy = 0; dy < 10; dy++)      // big black 10x10 stars
         for (int dx = 0; dx < 10; dx++)
           if (sx + dx >= 0 && sx + dx < W && sy + dy >= 0 && sy + dy < H)
-            fb[(size_t)(sy + dy) * W + sx + dx] = 0;
+            fb[(size_t)(sy + dy) * W + sx + dx] = 3;
     }
-    drawTextCentred("XTENSA SIMD ASSEMBLY", 60, 4, 0);
-    drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 120, 2, 1);
-    drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 150, 2, 1);
+    // caption band: white text on black (static, so it never re-drives)
+    for (int y = 42; y < 180; y++)
+      memset(fb + (size_t)y * W, 3, W);
+    drawTextCentred("XTENSA SIMD ASSEMBLY", 58, 4, 0);
+    drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 118, 2, 0);
+    drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 148, 2, 0);
     epd.paint(fb);
   }
 }
@@ -352,7 +420,6 @@ static void screenCredits(uint32_t ms) {
 // ---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-  epd.setAutoShutdown(false);
   if (!epd.begin()) {
     Serial.println("EPD init failed");
     while (1) delay(1000);
