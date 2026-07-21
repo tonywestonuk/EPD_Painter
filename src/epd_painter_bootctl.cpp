@@ -110,6 +110,7 @@ uint8_t* EPD_BootCtl::FractalImage::getBootImage(uint16_t W, uint16_t H) {
 // =============================================================================
 
 void EPD_BootCtl::_powerOff() {
+//    return;  // TEMP (Tony): rig work — never power the board down
     const EPD_Painter::Config& cfg = _epd.getConfig();
 
     if (cfg.pin_syspwr >= 0) {
