@@ -37,6 +37,8 @@ class EPD_ISRController;
 
 
 #include <esp_private/gdma.h>
+#include <esp_heap_caps.h>
+#include <stdio.h>
 #include <hal/dma_types.h>
 #include <esp_intr_alloc.h>
 
@@ -321,6 +323,21 @@ struct PowerCtlConfig {
   }
   const Config* getPreset() const {
     return _preset;
+  }
+
+  // One-line engine state + heap dump for field debugging: call it from
+  // the app when the display misbehaves (e.g. a debug key). Ghosts that
+  // ordinary paints cannot erase but clear() can mean either a phantom
+  // template (tpl=1 here without ever calling setTemplate = something
+  // scribbled on this object) or screenbuffer/glass divergence.
+  void debugState() const {
+    printf("[EPD] tpl=%d dir=%d ceng=%d g16=%d tplp=%p/%p | int free=%u "
+           "largest=%u | psram free=%u\n",
+           (int)_has_template, (int)_decision_direct, (int)_decision_engine,
+           (int)_grey16, tpl_data, tpl_mask,
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   }
 
   void setAutoShutdown(bool v) { _autoShutdown = v; }

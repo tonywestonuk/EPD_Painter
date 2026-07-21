@@ -930,7 +930,23 @@ void EPD_Painter::_paint_task_body() {
     // Template layer: force protected pixels back to their template
     // values before discovery — every engine path (SIMD, C, direct,
     // 16-grey) then simply sees them as unchanged.
+    // Tripwire: an app that never calls setTemplate() must never see
+    // this fire — if it does, something scribbled on the driver object
+    // (heap overflow elsewhere) and flipped the flag with garbage
+    // pointers. Announce loudly instead of stamping junk on the glass.
+    if (_has_template && (!tpl_data || !tpl_mask)) {
+      printf("[EPD_Painter] CORRUPTION: template flag set with null "
+             "planes (tpl_data=%p tpl_mask=%p) — disabling overlay\n",
+             tpl_data, tpl_mask);
+      _has_template = false;
+    }
     if (_has_template && _tpl_grey16 == _grey16) {
+      static bool announced = false;
+      if (!announced) {
+        announced = true;
+        printf("[EPD_Painter] template overlay ACTIVE (data=%p mask=%p)\n",
+               tpl_data, tpl_mask);
+      }
       const size_t words =
           (size_t)_config.width * _config.height / (_grey16 ? 2 : 4) / 4;
       uint32_t *p = (uint32_t *)(_grey16 ? packed4_paintbuffer
@@ -939,6 +955,7 @@ void EPD_Painter::_paint_task_body() {
       const uint32_t *m = (const uint32_t *)tpl_mask;
       for (size_t i = 0; i < words; i++) p[i] = (p[i] & ~m[i]) | t[i];
     }
+
 #ifdef EPD_ASM_TIMING
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
