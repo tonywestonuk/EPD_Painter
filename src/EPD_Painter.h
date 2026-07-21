@@ -340,6 +340,16 @@ struct PowerCtlConfig {
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   }
 
+  // Screenbuffer state guard: checksums the physical-state buffer at the
+  // end of every drive and verifies it at the start of the next. The
+  // library is the only legitimate writer between drives, so a mismatch
+  // proves an EXTERNAL write (heap-neighbour overflow) corrupted the
+  // delta engine's map of the glass — the exact mechanism behind
+  // "ghosts ordinary paints cannot erase but clear() can". Announces
+  // loudly with heap watermarks. Costs ~1-2 ms per paint; setStateGuard
+  // (false) disables for release/video builds.
+  void setStateGuard(bool on) { _sb_guard_on = on; _sb_guard_valid = false; }
+
   void setAutoShutdown(bool v) { _autoShutdown = v; }
   EPD_PainterShutdown* shutdown() { return _shutdown; }
 
@@ -452,6 +462,14 @@ private:
   bool     _has_template = false;
   bool     _tpl_grey16   = false;
   Quality  _tpl_quality  = Quality::QUALITY_NORMAL;
+
+  // ---- screenbuffer state guard ----
+  bool     _sb_guard_on = true;
+  bool     _sb_guard_valid = false;
+  uint32_t _sb_guard = 0;
+  uint32_t _sb_checksum() const;
+  void     _sb_guard_update();
+  void     _sb_guard_check();
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};

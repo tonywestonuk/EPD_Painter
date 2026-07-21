@@ -215,6 +215,7 @@ bool EPD_Painter::setGreyLevels(int levels) {
     }
   }
   _grey16 = on;
+  _sb_guard_update();          // guard follows the active-mode buffer
   xSemaphoreGive(_paint_buffer_sem);
   return true;
 }
@@ -927,6 +928,7 @@ void EPD_Painter::_paint_task_body() {
     // paintbuffer is being read directly; paint()/paintPacked() block on it
     // rather than on paintStage if they arrive mid-sweep.
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+    _sb_guard_check();
     // Template layer: force protected pixels back to their template
     // values before discovery — every engine path (SIMD, C, direct,
     // 16-grey) then simply sees them as unchanged.
@@ -1233,6 +1235,7 @@ void EPD_Painter::_paint_task_body() {
       sendRow(row == 0, row == _config.height - 1);
     }
 
+    _sb_guard_update();
     _paints_done.fetch_add(1);
   }
 }
@@ -1252,6 +1255,36 @@ void EPD_Painter::_paint_task_body() {
 // on the next boot unpaintPacked() works from a clean white baseline rather
 // than the painted state that was left in PSRAM.
 // =============================================================================
+// ---- screenbuffer state guard (see header) --------------------------------
+uint32_t EPD_Painter::_sb_checksum() const {
+  const uint8_t *sb = _grey16 ? packed4_screenbuffer : packed_screenbuffer;
+  if (!sb) return 0;
+  const size_t words =
+      (size_t)_config.width * _config.height / (_grey16 ? 2 : 4) / 4;
+  const uint32_t *w = (const uint32_t *)sb;
+  uint32_t sum = 0;
+  for (size_t i = 0; i < words; i++) sum += w[i] * 2654435761u;
+  return sum;
+}
+
+void EPD_Painter::_sb_guard_update() {
+  if (!_sb_guard_on) return;
+  _sb_guard = _sb_checksum();
+  _sb_guard_valid = true;
+}
+
+void EPD_Painter::_sb_guard_check() {
+  if (!_sb_guard_on || !_sb_guard_valid) return;
+  if (_sb_checksum() != _sb_guard) {
+    printf("[EPD_Painter] CORRUPTION: screenbuffer changed BETWEEN drives "
+           "— external write (heap overflow elsewhere?). int free=%u "
+           "largest=%u psram free=%u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  }
+}
+
 void EPD_Painter::clearBuffers() {
   const size_t packed_bytes = (size_t)_config.width * _config.height / 4;
   if (packed_fastbuffer)   memset(packed_fastbuffer,   0, packed_bytes);
@@ -1259,6 +1292,7 @@ void EPD_Painter::clearBuffers() {
   if (packed_paintbuffer)  memset(packed_paintbuffer,  0, packed_bytes);
   if (packed4_screenbuffer) memset(packed4_screenbuffer, 0, packed_bytes * 2);
   if (packed4_paintbuffer)  memset(packed4_paintbuffer,  0, packed_bytes * 2);
+  _sb_guard_update();
 }
 
 // =============================================================================
