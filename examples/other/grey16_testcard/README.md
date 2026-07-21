@@ -40,6 +40,7 @@ Quality must be `QUALITY_NORMAL` or `QUALITY_HIGH`; 16-grey mode refuses
 | `p` | pure-darken dose probe (raw response ladder) |
 | `m` | match card: dithered references above, native levels below |
 | `t <id> <13 codes>` | upload one train (codes 0–3 per pass) |
+| `x <frames>` | perf test: 16 bouncing patches, one per level, reports fps |
 | `g <level> <cycles>` | DC ghost test: cycle paint/erase on the left half |
 | `u <level>` | uniform full-screen level (probe grey / erase) |
 | `F` / `M` | load formula removes (unbalanced control) / tuned trains |

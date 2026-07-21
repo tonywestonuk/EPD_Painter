@@ -150,6 +150,55 @@ static void loadPureDarkenLadder() {
   }
 }
 
+// Performance test: 16 bouncing patches, one per grey level (level 0 kept
+// visible by its black border), single paint() per frame. paint() returns
+// when the paint task picks the frame up, so rendering the next frame
+// overlaps driving the current one — the loop measures true engine
+// throughput. Patch motion exercises apply, remove AND grey-to-grey
+// (overlap) decisions every frame.
+static void perfTest(int frames) {
+  struct Patch { int x, y, vx, vy; };
+  static Patch p[16];
+  const int PW = 110, PH = 110;
+  for (int i = 0; i < 16; i++) {
+    p[i].x = (i % 4) * (W - PW) / 3;
+    p[i].y = (i / 4) * (H - PH) / 3;
+    p[i].vx = ((i % 5) + 4) * ((i & 1) ? -1 : 1);
+    p[i].vy = (((i * 3) % 5) + 4) * ((i & 2) ? -1 : 1);
+  }
+  epd.clear();
+  const uint32_t t0 = millis();
+  for (int f = 0; f < frames; f++) {
+    for (int i = 0; i < 16; i++) {
+      p[i].x += p[i].vx; p[i].y += p[i].vy;
+      if (p[i].x < 0)      { p[i].x = 0;      p[i].vx = -p[i].vx; }
+      if (p[i].y < 0)      { p[i].y = 0;      p[i].vy = -p[i].vy; }
+      if (p[i].x > W - PW) { p[i].x = W - PW; p[i].vx = -p[i].vx; }
+      if (p[i].y > H - PH) { p[i].y = H - PH; p[i].vy = -p[i].vy; }
+    }
+    memset(fb, 0, (size_t)W * H);
+    for (int i = 0; i < 16; i++) {
+      for (int y = 0; y < PH; y++) {
+        uint8_t *row = fb + (size_t)(p[i].y + y) * W + p[i].x;
+        if (y < 3 || y >= PH - 3) memset(row, 15, PW);
+        else {
+          row[0] = row[1] = row[2] = 15;
+          row[PW - 3] = row[PW - 2] = row[PW - 1] = 15;
+          memset(row + 3, i, PW - 6);
+        }
+      }
+    }
+    epd.paint(fb);
+    if ((f + 1) % 20 == 0)
+      Serial.printf("[grey16] perf %d/%d: %.2f fps\n", f + 1, frames,
+                    (f + 1) * 1000.0f / (millis() - t0));
+  }
+  const uint32_t dt = millis() - t0;
+  Serial.printf("[grey16] perf done: %d frames, %lu ms, %.2f fps (%.0f ms/frame)\n",
+                frames, (unsigned long)dt, frames * 1000.0f / dt,
+                (float)dt / frames);
+}
+
 // DC-balance ghost test (phase D). Cycle paint/erase of a level on the
 // LEFT half only; the right half stays virgin. If removes are charge-
 // matched the two halves' ledgers are identical afterwards, and a uniform
@@ -198,6 +247,13 @@ void loop() {
       Serial.println("[grey16] pure-darken dose probe (bars 1..13 = 1..13 passes)");
       break;
     case 'm': drawMatchCard(); show(); Serial.println("[grey16] match card"); break;
+    case 'x': {
+      // x <frames>   bouncing-patch performance test
+      int frames = Serial.parseInt();
+      if (frames < 1) frames = 60;
+      if (frames > 2000) frames = 2000;
+      perfTest(frames);
+    } break;
     case 'g': {
       // g <level> <cycles>   paint/erase LEFT half N times, end white
       const int level  = Serial.parseInt();
