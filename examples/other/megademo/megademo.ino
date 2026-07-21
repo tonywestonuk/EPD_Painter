@@ -332,6 +332,22 @@ static void screenStars(uint32_t ms) {
     memset(fb, 3, (size_t)W * H); epd.paint(fb);
     memset(fb, 0, (size_t)W * H); epd.paint(fb);
   }
+  // Banded quality, the delta-engine way (Tony's idea): the caption band
+  // is painted ONCE at NORMAL — deep saturated black, crisp text — and
+  // the animation then runs FAST. Unchanged pixels are never re-driven,
+  // so the band keeps its NORMAL rendering under a FAST starfield:
+  // quality is a property of the paint that last touched a pixel, not
+  // of the frame.
+  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  memset(fb, 0, (size_t)W * H);
+  for (int y = 42; y < 180; y++)
+    memset(fb + (size_t)y * W, 3, W);
+  drawTextCentred("XTENSA SIMD ASSEMBLY", 58, 4, 0);
+  drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 118, 2, 0);
+  drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 148, 2, 0);
+  epd.paint(fb);
+  while (!epd.paintIdle()) delay(5);      // finish at NORMAL before switching
+  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
   struct Star { int16_t x, y; uint16_t z; };
   static Star st[220];
   for (int i = 0; i < 220; i++)
@@ -358,6 +374,18 @@ static void screenStars(uint32_t ms) {
     drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 148, 2, 0);
     epd.paint(fb);
   }
+  // Undo in the quality you painted: the band went on at NORMAL (+13 a
+  // pixel over ~9 ms passes), so erasing it with the next screen's FAST
+  // clear (-7 over ~5 ms) would strand charge. Erase JUST the band at
+  // NORMAL — a cheap delta paint — and leave the stars for the FAST
+  // clear that matches them.
+  while (!epd.paintIdle()) delay(5);
+  for (int y = 42; y < 180; y++)
+    memset(fb + (size_t)y * W, 0, W);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  epd.paint(fb);
+  while (!epd.paintIdle()) delay(5);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
 }
 
 // ---------------------------------------------------------------------------
