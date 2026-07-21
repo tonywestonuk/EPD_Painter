@@ -668,6 +668,7 @@ bool EPD_Painter::end() {
 // Power control
 // =============================================================================
 void EPD_Painter::powerOn() {
+  printf("[EPD] panel power ON\n");
   _pin_le->set(false);
   _pin_spv->set(false);
   _pin_sph->set(false);
@@ -686,6 +687,7 @@ void EPD_Painter::powerOn() {
 }
 
 void EPD_Painter::powerOff() {
+  printf("[EPD] panel power OFF\n");
   _powerDriver->powerOff();
 }
 
@@ -937,6 +939,7 @@ void EPD_Painter::_paint_task_body() {
     // (heap overflow elsewhere) and flipped the flag with garbage
     // pointers. Announce loudly instead of stamping junk on the glass.
     if (_has_template && (!tpl_data || !tpl_mask)) {
+      _tpl_trip_hits++;
       printf("[EPD_Painter] CORRUPTION: template flag set with null "
              "planes (tpl_data=%p tpl_mask=%p) — disabling overlay\n",
              tpl_data, tpl_mask);
@@ -946,6 +949,7 @@ void EPD_Painter::_paint_task_body() {
       static bool announced = false;
       if (!announced) {
         announced = true;
+        _tpl_trip_hits++;
         printf("[EPD_Painter] template overlay ACTIVE (data=%p mask=%p)\n",
                tpl_data, tpl_mask);
       }
@@ -1276,6 +1280,7 @@ void EPD_Painter::_sb_guard_update() {
 void EPD_Painter::_sb_guard_check() {
   if (!_sb_guard_on || !_sb_guard_valid) return;
   if (_sb_checksum() != _sb_guard) {
+    _sb_guard_hits++;
     printf("[EPD_Painter] CORRUPTION: screenbuffer changed BETWEEN drives "
            "— external write (heap overflow elsewhere?). int free=%u "
            "largest=%u psram free=%u\n",

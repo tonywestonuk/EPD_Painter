@@ -330,11 +330,15 @@ struct PowerCtlConfig {
   // ordinary paints cannot erase but clear() can mean either a phantom
   // template (tpl=1 here without ever calling setTemplate = something
   // scribbled on this object) or screenbuffer/glass divergence.
+  // sbhits / tplhits are RETAINED tripwire counters — nonzero means the
+  // event happened at some point since boot, even if serial was not
+  // attached at the moment it fired.
   void debugState() const {
-    printf("[EPD] tpl=%d dir=%d ceng=%d g16=%d tplp=%p/%p | int free=%u "
-           "largest=%u | psram free=%u\n",
+    printf("[EPD] tpl=%d dir=%d ceng=%d g16=%d tplp=%p/%p | sbhits=%lu "
+           "tplhits=%lu | int free=%u largest=%u | psram free=%u\n",
            (int)_has_template, (int)_decision_direct, (int)_decision_engine,
            (int)_grey16, tpl_data, tpl_mask,
+           (unsigned long)_sb_guard_hits, (unsigned long)_tpl_trip_hits,
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -349,6 +353,13 @@ struct PowerCtlConfig {
   // loudly with heap watermarks. Costs ~1-2 ms per paint; setStateGuard
   // (false) disables for release/video builds.
   void setStateGuard(bool on) { _sb_guard_on = on; _sb_guard_valid = false; }
+
+  // Idle panel power-off (the 1 Hz guard task powers rails down ~5 s
+  // after the last paint; the next paint powers them back up). false =
+  // keep the rails up between paints — field-debug / mitigation switch:
+  // idle power transitions are suspected of disturbing glass state that
+  // the screenbuffer never learns about (un-erasable ghosts).
+  void setIdlePowerOff(bool on) { _idle_power_off = on; }
 
   void setAutoShutdown(bool v) { _autoShutdown = v; }
   EPD_PainterShutdown* shutdown() { return _shutdown; }
@@ -467,9 +478,13 @@ private:
   bool     _sb_guard_on = true;
   bool     _sb_guard_valid = false;
   uint32_t _sb_guard = 0;
+  uint32_t _sb_guard_hits = 0;   // retained: external screenbuffer writes
+  uint32_t _tpl_trip_hits = 0;   // retained: overlay active / bad pointers
   uint32_t _sb_checksum() const;
   void     _sb_guard_update();
   void     _sb_guard_check();
+
+  bool _idle_power_off = true;
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
@@ -543,7 +558,7 @@ private:
       for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         xSemaphoreTake(power_mtx, portMAX_DELAY);
-        if (state > 0) {
+        if (state > 0 && owner->_idle_power_off) {
           state--;
           if (state == 0) owner->powerOff();
         }
