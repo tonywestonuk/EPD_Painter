@@ -212,3 +212,42 @@ Erase-then-draw note: a grey-to-grey pixel today needs two paint calls
 coexist in the todo word; a batcher that places remove-decisions in
 earlier sweeps completes the transition in one paint. The last deferral
 in the engine goes away.
+
+## Next: direct grey-to-grey transitions (agreed 21 July 2026)
+
+Motivated by the megademo's bouncing-title artifact (Tony's diagnosis:
+black text descending into its own grey drop-shadow — every grey-to-grey
+pixel two-steps through white, punching visible holes; ascending runs
+the same physics at invisible contrast). The gap: the LUTs only know
+trajectories from and to white. The generalization the engine was built
+for: **decision = (from, to)**, not (level, direction).
+
+Two-tier plan:
+
+- **4-level mode: six direct trains** — (1→2),(1→3),(2→3) darken more
+  from a known grey; (3→2),(3→1),(2→1) whiten-then-redarken landing ON a
+  grey (the mixed-polarity shapes the 16-grey tuning already proved).
+  Six new decision ids; discovery emits direct(sv→nv) for changed
+  occupied pixels (the C path holds both values; the compat split into
+  dark/light planes becomes the legacy mode). Calibration: transition
+  card on the rig — paint from-level patches, repaint to-level, match
+  landings against reference patches painted from white. Per board, per
+  quality; FAST's 7 passes may be tight for the lightening trains
+  (NORMAL is safe; the card will say).
+
+- **16-grey mode: temporally partitioned trains** — 240 directed pairs
+  is too many to tune, so concatenate instead: all removes drive passes
+  0..R-1, every apply train shifts right by R (R = longest remove in
+  play that frame). One pixel may then hold two decisions in disjoint
+  pass ranges — the OR-merge stays safe because the trains never drive
+  the same pass. Pass count = R + longest apply (truncation already
+  scales it); deep transitions cost more passes, content without
+  grey-to-grey pays nothing.
+
+**DC balance by construction**: define potential Q(g) = the apply
+train's net charge (already measured per board). Every direct train
+must carry exactly Q(to) − Q(from). The ledger becomes path-independent
+— white→2→3→white nets zero along any route.
+
+Gate: the shadowed bouncing logo descending with no via-white holes,
+plus the N-cycle ghost test over mixed transition paths.
