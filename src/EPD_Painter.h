@@ -239,6 +239,40 @@ struct PowerCtlConfig {
       for (int p = 0; p < DEC_WF_LEN16; p++) dec_trains16[id][p] = train[p];
   }
 
+  // Direct grey-to-grey transitions (4-level mode — see DECISION_ENGINE.md
+  // "direct grey-to-grey transitions"). When on, a changed occupied pixel
+  // whose (from, to) pair has a loaded train is driven straight to its new
+  // level in ONE paint — no erase-to-white two-step. Pairs without a train
+  // keep the legacy two-step, so the engine comes up one tuned pair at a
+  // time. First enable allocates 2 spill slot planes (~260 KB PSRAM).
+  // Call after begin(). Returns false on allocation failure.
+  bool setDirectTransitions(bool on);
+
+  // Decision id of a direct transition: from/to = 2bpp levels 1..3.
+  static constexpr uint8_t directId(uint8_t from, uint8_t to) {
+    return (uint8_t)(16 | (from << 2) | to);
+  }
+
+  // Load one direct train (len drive codes, up to DEC_WF_LEN_DIR = 26 —
+  // a direct train may be LONGER than the quality's pass count: deep
+  // lightening transitions need erase + re-darken room, and the frame's
+  // pass count extends to the longest direct train in play, so content
+  // without deep transitions pays nothing). nullptr unloads the pair back
+  // to the two-step. The DC constraint is the tuner's job, not enforced
+  // here: the train's net darkens must equal Q(to) - Q(from), where Q(g)
+  // is the net darkens of level g's apply train — that makes the charge
+  // ledger path-independent.
+  void setDirectTrain(uint8_t from, uint8_t to, const uint8_t *train,
+                      int len = DEC_WF_LEN16) {
+    if (from < 1 || from > 3 || to < 1 || to > 3 || from == to) return;
+    const int key = (from << 2) | to;
+    if (!train) { _dir_loaded &= (uint16_t)~(1u << key); return; }
+    if (len > DEC_WF_LEN_DIR) len = DEC_WF_LEN_DIR;
+    for (int p = 0; p < DEC_WF_LEN_DIR; p++)
+      dec_trains_dir[key][p] = (p < len) ? train[p] : 0;
+    _dir_loaded |= (uint16_t)(1u << key);
+  }
+
   // Panel temperature in °C from the power PMIC's sensor (TPS65185 boards).
   // Returns EPD_PowerDriver::TEMP_UNAVAILABLE (-1000) if the board has no
   // sensor or begin() has not run yet.
@@ -298,10 +332,14 @@ private:
   // (dir 0 = apply, 1 = remove). Discovery fills per-line todo words and
   // sweep lists; the pass loop consumes the lists generically. Phase B:
   // 4-level compatibility — decisions 2..7, at most 2 sweeps per line.
-  static constexpr int DEC_MAX_SWEEPS   = 2;   // 4-level compat sweep lists
+  // The direct-transition engine adds ids 16..30 (16 | (from << 2) | to)
+  // and can put 12 distinct decisions on a line (3 applies + 3 removes +
+  // 6 directs) = 4 sweeps; compat still writes at most 2.
+  static constexpr int DEC_MAX_SWEEPS   = 4;   // 4-level sweep lists
   static constexpr int DEC_MAX_SWEEPS16 = 10;  // 16-grey: ceil(30 decisions / 3)
   static constexpr int DEC_IDS          = 32;  // 16 levels x 2 directions
   static constexpr int DEC_WF_LEN16     = 13;  // train length (NORMAL/HIGH)
+  static constexpr int DEC_WF_LEN_DIR   = 26;  // max direct-train length
   // 16-grey constant pass period (row loop + padding), per quality. A row
   // converts k sweeps, so the row loop's duration varies with content —
   // and pass duration IS the retention dose. Padding every pass to a
@@ -326,6 +364,17 @@ private:
                                   uint32_t *maskL_out, uint32_t *todo_out);
   void _decision_batch_compat();
   bool _decision_engine = false;   // C discovery path off until phase C needs it
+
+  // ---- direct grey-to-grey transitions (4-level; DECISION_ENGINE.md) ----
+  // key = (from << 2) | to, decision id = 16 | key. _dir_loaded gates
+  // per-pair engagement so unloaded pairs fall back to the two-step.
+  uint8_t   dec_trains_dir[16][DEC_WF_LEN_DIR];
+  uint16_t  _dir_loaded = 0;
+  bool      _decision_direct = false;
+  uint8_t  *dec_spill_dir = nullptr;   // slot planes for sweeps 2..3 (PSRAM)
+  uint32_t _decision_discover_direct();
+  void _decision_discover_direct_row(int row);
+  uint8_t *_dec_plane_row_dir(int sweep, int row);
 
   // ---- 16-grey mode (phase C) ----
   // 4bpp desired/physical state, spill slot planes for sweeps 2..9 (sweep 0

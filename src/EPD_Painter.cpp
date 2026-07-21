@@ -212,6 +212,25 @@ bool EPD_Painter::setGreyLevels(int levels) {
 }
 
 // =============================================================================
+// setDirectTransitions() — 4-level direct grey-to-grey engine
+// (see DECISION_ENGINE.md "direct grey-to-grey transitions")
+// =============================================================================
+bool EPD_Painter::setDirectTransitions(bool on) {
+  if (!on) { _decision_direct = false; return true; }
+  if (!dec_spill_dir) {
+    const size_t plane_bytes = (size_t)_config.width * _config.height / 4;
+    dec_spill_dir = (uint8_t *)heap_caps_aligned_alloc(
+        16, plane_bytes * (DEC_MAX_SWEEPS - 2), MALLOC_CAP_SPIRAM);
+    if (!dec_spill_dir) {
+      printf("[EPD_Painter] direct-transition spill allocation failed\n");
+      return false;
+    }
+  }
+  _decision_direct = true;
+  return true;
+}
+
+// =============================================================================
 // sendRow()
 // =============================================================================
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool noAdvance) {
@@ -809,6 +828,11 @@ void EPD_Painter::_paint_task_body() {
       any_work = _decision_discover16();
       sweep_list = dec_sweeps16;
       sweep_stride = DEC_MAX_SWEEPS16;
+    } else if (_decision_direct) {
+      // Direct-transition engine: greedy-sweep discovery over the 2bpp
+      // buffers, grey-to-grey pixels driven in one paint where a pair
+      // train is loaded (see DECISION_ENGINE.md).
+      any_work = _decision_discover_direct();
     } else if (_decision_engine) {
       // Decision engine: C discovery — planes, masks, per-line todo words.
       any_work = _decision_discover();
@@ -886,6 +910,14 @@ void EPD_Painter::_paint_task_body() {
         dec_train[(g << 1) | 1] = lt_wf + (g - 1) * wf_len;
       }
       for (int id = 8; id < DEC_IDS; id++) dec_train[id] = nullptr;
+      if (_decision_direct) {
+        // Direct grey-to-grey trains: loaded pairs only — discovery never
+        // emits an unloaded pair's id, but keep binding and gate in step.
+        for (int f = 1; f <= 3; f++)
+          for (int t = 1; t <= 3; t++)
+            if (f != t && (_dir_loaded & (1u << ((f << 2) | t))))
+              dec_train[directId(f, t)] = dec_trains_dir[(f << 2) | t];
+      }
     }
 
     // Pass count = length of the longest train in play (DECISION_ENGINE.md).
@@ -895,6 +927,13 @@ void EPD_Painter::_paint_task_body() {
     // full-period window before the next latch. dec_todo holds the frame's
     // decision ids from discovery. 4-level mode keeps its calibrated fixed
     // pass count.
+    // Per-id train lengths: base trains are exactly wf_len codes (the
+    // FAST tables are 7-long rows — reading past them would overrun into
+    // the next level's row), direct trains up to DEC_WF_LEN_DIR. The
+    // bcast loop floats any id past its own length.
+    uint8_t dec_len[DEC_IDS];
+    for (int id = 0; id < DEC_IDS; id++) dec_len[id] = (uint8_t)wf_len;
+
     if (_grey16) {
       uint32_t inplay = 0;
       for (int row = 0; row < _config.height; row++) inplay |= dec_todo[row];
@@ -905,6 +944,19 @@ void EPD_Painter::_paint_task_body() {
           if (dec_train[id][p] && p >= need) need = p + 1;
       }
       wf_len = need;
+    } else if (_decision_direct) {
+      // Direct trains may be LONGER than the quality's pass count (deep
+      // lightening transitions need erase + re-darken room). Extend the
+      // frame to the longest direct train actually in play — content
+      // without deep transitions pays nothing (DECISION_ENGINE.md).
+      uint32_t inplay = 0;
+      for (int row = 0; row < _config.height; row++) inplay |= dec_todo[row];
+      for (int id = 16; id < DEC_IDS; id++) {
+        if (!(inplay & (1u << id)) || !dec_train[id]) continue;
+        dec_len[id] = DEC_WF_LEN_DIR;
+        for (int p = wf_len; p < DEC_WF_LEN_DIR; p++)
+          if (dec_train[id][p]) wf_len = p + 1;
+      }
     }
 
     // The pass loop consumes per-line sweep lists: a sweep = one staged
@@ -926,7 +978,8 @@ void EPD_Painter::_paint_task_body() {
       uint8_t bcast[DEC_IDS];
       bcast[0] = bcast[1] = 0;
       for (int id = 2; id < DEC_IDS; id++)
-        bcast[id] = dec_train[id] ? (uint8_t)(dec_train[id][pass] * 0x55) : 0;
+        bcast[id] = (dec_train[id] && pass < dec_len[id])
+                        ? (uint8_t)(dec_train[id][pass] * 0x55) : 0;
 
       for (int row = 0; row < _config.height; row++) {
 #ifdef EPD_ASM_TIMING

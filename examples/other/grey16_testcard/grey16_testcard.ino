@@ -17,6 +17,8 @@
 //   g <level> <cycles>  DC ghost test: cycle paint/erase on left half
 //   u <level>  uniform probe grey    F/M  formula / charge-matched removes
 //   H/N  quality high / normal
+//   d  4-level direct grey-to-grey mode (seed trains)   D  transition card
+//   j <from> <to> <13 codes 0-2>  upload a direct train
 //
 // Trains are the phase C placeholder formula library; expect the levels to
 // be distinguishable and monotonic but not evenly spaced — even spacing is
@@ -32,6 +34,7 @@
 #include "EPD_Painter_presets.h"
 #include "tuned_trains_lilygo_t5s3.h"
 #include "tuned_trains_m5papers3.h"
+#include "direct_trains_m5papers3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -303,6 +306,73 @@ static void loadFormulaRemoves() {
   }
 }
 
+// ---- direct grey-to-grey transitions (4-level; DECISION_ENGINE.md) --------
+// The transition card: 9 columns grouped by target level, reference first.
+// Phase A paints every column's FROM level (references stay white), phase B
+// repaints with the TO levels in ONE paint — transition columns go through
+// the direct trains, references are plain applies from white. The scan
+// compares each transition column's landing against its group's reference.
+// An unloaded/failed pair shows as a white column (two-step fallback,
+// deliberately not mopped up by a second paint).
+static const uint8_t cardFrom[9] = { 0, 2, 3,   0, 1, 3,   0, 1, 2 };
+static const uint8_t cardTo[9]   = { 1, 1, 1,   2, 2, 2,   3, 3, 3 };
+
+static void cardFill(const uint8_t *lv) {
+  for (int i = 0; i < 9; i++) {
+    const int x0 = (i * W) / 9, x1 = ((i + 1) * W) / 9;
+    for (int y = 0; y < H; y++)
+      memset(fb + (size_t)y * W + x0, lv[i], x1 - x0);
+  }
+}
+
+// Mixed-path DC ghost test: cycle the LEFT half through the grey-to-grey
+// web — white>1>2>3>2>1>white then white>1>3>1>white — every direct train
+// plus apply(1)/remove(1) fires each cycle, single paint per step. If the
+// direct nets are honest (Q(to)-Q(from)) both path ledgers sum to zero and
+// a uniform probe ('u') afterwards shows no midline step.
+static void halfFill(uint8_t lv) {
+  for (int y = 0; y < H; y++) {
+    memset(fb + (size_t)y * W, lv, W / 2);
+    memset(fb + (size_t)y * W + W / 2, 0, W - W / 2);
+  }
+}
+
+static bool directOn = false;
+
+static void directGhost(int cycles) {
+  static const uint8_t seqA[] = { 1, 2, 3, 2, 1, 0 };
+  static const uint8_t seqB[] = { 1, 3, 1, 0 };
+  epd.clear();
+  for (int n = 0; n < cycles; n++) {
+    // Legacy control arm ('e' toggles the engine off): the same visual
+    // sequence through the two-step — each step needs the second paint to
+    // redraw its erased grey-to-grey pixels.
+    for (unsigned k = 0; k < sizeof(seqA); k++) {
+      halfFill(seqA[k]); epd.paint(fb);
+      if (!directOn) epd.paint(fb);
+    }
+    for (unsigned k = 0; k < sizeof(seqB); k++) {
+      halfFill(seqB[k]); epd.paint(fb);
+      if (!directOn) epd.paint(fb);
+    }
+    Serial.printf("[direct] ghost cycle %d/%d\n", n + 1, cycles);
+  }
+  while (!epd.paintIdle()) delay(5);
+}
+
+static void transitionCard() {
+  if (mode16) { Serial.println("[direct] 4-level mode required ('d' first)"); return; }
+  epd.clear();
+  cardFill(cardFrom);
+  epd.paint(fb); epd.paint(fb);            // two-step allowed here: all applies
+  while (!epd.paintIdle()) delay(5);
+  delay(300);
+  cardFill(cardTo);
+  epd.paint(fb);                           // ONE paint — the direct engine's gate
+  while (!epd.paintIdle()) delay(5);
+  Serial.println("[direct] transition card done (cols: ref,2>1,3>1 | ref,1>2,3>2 | ref,1>3,2>3)");
+}
+
 void loop() {
   if (!Serial.available()) { delay(20); return; }
   switch (Serial.read()) {
@@ -393,6 +463,53 @@ void loop() {
       } else {
         Serial.println("[grey16] bad train line");
       }
+    } break;
+    case 'd':
+      // direct grey-to-grey mode: 4-level + direct engine + seed trains
+      if (!epd.setGreyLevels(4)) { Serial.println("[direct] setGreyLevels(4) failed"); break; }
+      mode16 = false;
+      if (!epd.setDirectTransitions(true)) { Serial.println("[direct] enable failed"); break; }
+      directOn = true;
+      if (epd.getConfig().pin_syspwr >= 0) {
+        loadDirectTrainsM5PaperS3(epd);
+        Serial.println("[direct] 4-level direct mode, M5PaperS3 tuned trains loaded");
+      } else {
+        Serial.println("[direct] 4-level direct mode, NO trains for this board (all pairs two-step)");
+      }
+      break;
+    case 'e':
+      // A/B lever: toggle the direct engine (trains stay loaded)
+      directOn = !directOn;
+      epd.setDirectTransitions(directOn);
+      Serial.printf("[direct] engine %s\n", directOn ? "ON" : "OFF (legacy two-step)");
+      break;
+    case 'D': transitionCard(); break;
+    case 'G': {
+      // G <cycles>   mixed-path direct ghost test (4-level direct mode)
+      int cycles = Serial.parseInt();
+      if (cycles < 1) cycles = 20;
+      if (cycles > 200) cycles = 200;
+      if (mode16) { Serial.println("[direct] 4-level mode required ('d' first)"); break; }
+      directGhost(cycles);
+      Serial.printf("[direct] ghost done: %d cycles, screen white\n", cycles);
+    } break;
+    case 'j': {
+      // j <from> <to> <up to 26 codes 0-2, newline-terminated>
+      // Trains longer than the quality's 13 passes extend the frame —
+      // deep lightening transitions need erase + re-darken room.
+      const int f = Serial.parseInt(), t = Serial.parseInt();
+      uint8_t tr[26]; int got = 0;
+      const unsigned long j0 = millis();
+      while (got < 26 && millis() - j0 < 2000) {
+        const int ch = Serial.read();
+        if (ch < 0) { delay(2); continue; }
+        if (ch >= '0' && ch <= '2') tr[got++] = (uint8_t)(ch - '0');
+        else if (ch == '\n') break;
+      }
+      if (got >= 1 && f >= 1 && f <= 3 && t >= 1 && t <= 3 && f != t) {
+        epd.setDirectTrain((uint8_t)f, (uint8_t)t, tr, got);
+        Serial.printf("[direct] train %d->%d set (%d passes)\n", f, t, got);
+      } else Serial.println("[direct] bad train line");
     } break;
     case 'H':
       epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);

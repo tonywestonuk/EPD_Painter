@@ -303,6 +303,108 @@ uint32_t EPD_Painter::_decision_discover16() {
   return any_work;
 }
 
+// ===========================================================================
+// 4-level direct-transition discovery
+// (see DECISION_ENGINE.md "direct grey-to-grey transitions")
+//
+// The same greedy-sweep walk as the 16-grey discovery, but over the 2bpp
+// buffers and with the (from, to) generalization the engine was built for:
+// a changed occupied pixel whose pair train is loaded takes ONE direct
+// decision — id 16 | (from << 2) | to — and the screen state lands on the
+// new value immediately, no two-step through white. Pairs without a loaded
+// train (and plain erases to white) emit remove(screen) exactly as before,
+// so behavior degrades gracefully to the legacy engine per pair. Up to 12
+// distinct decisions can share a row (3 applies + 3 removes + 6 directs) =
+// 4 sweeps: fastbuffer, lightbuffer, then the 2 direct spill planes.
+// ===========================================================================
+
+uint8_t *EPD_Painter::_dec_plane_row_dir(int sweep, int row) {
+  if (sweep == 0) return packed_fastbuffer  + (size_t)row * packed_row_bytes;
+  if (sweep == 1) return packed_lightbuffer + (size_t)row * packed_row_bytes;
+  return dec_spill_dir +
+         ((size_t)(sweep - 2) * _config.height + row) * packed_row_bytes;
+}
+
+void EPD_Painter::_decision_discover_direct_row(int row) {
+  const uint8_t *pb = packed_paintbuffer  + (size_t)row * packed_row_bytes;
+  uint8_t       *sb = packed_screenbuffer + (size_t)row * packed_row_bytes;
+  LineSweep *ls = &dec_sweeps[row * DEC_MAX_SWEEPS];
+
+  int8_t map[DEC_IDS];                               // id -> (sweep<<2)|slot
+  memset(map, -1, sizeof(map));
+  uint8_t *plane[DEC_MAX_SWEEPS];
+  int ndec = 0, nsweeps = 0;
+  uint32_t todo = 0;
+
+  const int chunks = _config.width / 64;             // 64 px = 16 bytes at 2bpp
+  for (int c = 0; c < chunks; c++) {
+    const uint32_t *pw = (const uint32_t *)(pb + c * 16);
+    const uint32_t *sw = (const uint32_t *)(sb + c * 16);
+    uint32_t diff = 0;
+    for (int i = 0; i < 4; i++) diff |= pw[i] ^ sw[i];
+    if (!diff) continue;
+    const uint32_t cbit = 0x80000000u >> c;          // asm mask convention
+
+    for (int b = 0; b < 16; b++) {
+      const uint8_t nb = pb[c * 16 + b];
+      uint8_t sbyte = sb[c * 16 + b];
+      if (nb == sbyte) continue;
+      for (int q = 0; q < 4; q++) {                  // q=0: leftmost px, high bits
+        const int shift = (3 - q) * 2;
+        const uint8_t nv = (nb    >> shift) & 3;
+        const uint8_t sv = (sbyte >> shift) & 3;
+        if (nv == sv) continue;
+        uint8_t id;
+        if (sv == 0) {                               // bare ground: plain apply
+          id = (uint8_t)(nv << 1);
+          sbyte |= (uint8_t)(nv << shift);
+        } else if (nv != 0 && (_dir_loaded & (1u << ((sv << 2) | nv)))) {
+          id = directId(sv, nv);                     // tuned direct transition
+          sbyte = (uint8_t)((sbyte & ~(3u << shift)) | (nv << shift));
+        } else {                                     // erase toward white (the
+          id = (uint8_t)((sv << 1) | 1);             // two-step for unloaded
+          sbyte = (uint8_t)(sbyte & ~(3u << shift)); // pairs — redrawn next paint)
+        }
+
+        int m = map[id];
+        if (m < 0) {                                 // first sighting this row
+          const int s = ndec / 3, slot = ndec % 3;
+          if (slot == 0) {                           // open a new sweep
+            plane[s] = _dec_plane_row_dir(s, row);
+            ls[s].plane_row = plane[s];
+            ls[s].mask = 0;
+            ls[s].dec[0] = ls[s].dec[1] = ls[s].dec[2] = 0;
+            nsweeps = s + 1;
+          }
+          ls[s].dec[slot] = id;
+          m = map[id] = (int8_t)((s << 2) | (slot + 1));
+          ndec++;
+          todo |= 1u << id;
+        }
+        const int s = m >> 2;
+        uint8_t *pl = plane[s];
+        if (!(ls[s].mask & cbit)) {                  // first touch: float chunk
+          memset(pl + c * 16, 0, 16);
+          ls[s].mask |= cbit;
+        }
+        pl[c * 16 + b] |= (uint8_t)((m & 3) << shift);
+      }
+      sb[c * 16 + b] = sbyte;
+    }
+  }
+  dec_todo[row]    = todo;
+  dec_nsweeps[row] = (uint8_t)nsweeps;
+}
+
+uint32_t EPD_Painter::_decision_discover_direct() {
+  uint32_t any_work = 0;
+  for (int row = 0; row < _config.height; row++) {
+    _decision_discover_direct_row(row);
+    any_work |= dec_nsweeps[row];
+  }
+  return any_work;
+}
+
 // ---- placeholder train library (phase C) ----------------------------------
 // Formula trains for NORMAL/HIGH's 13 passes; phase D replaces these with
 // scanner-calibrated tables. Dose is counted in half-pass units: a darken
