@@ -12,6 +12,11 @@
 //   i  inverse staircase — black to white (exercises remove-decisions:
 //                  every bar boundary is a grey-to-grey transition)
 //   c  clear     — full hard clear
+//   p  pure-darken dose probe        m  match card (dither references)
+//   t <id> <13 codes>  upload a train over serial
+//   g <level> <cycles>  DC ghost test: cycle paint/erase on left half
+//   u <level>  uniform probe grey    F/M  formula / charge-matched removes
+//   H/N  quality high / normal
 //
 // Trains are the phase C placeholder formula library; expect the levels to
 // be distinguishable and monotonic but not evenly spaced — even spacing is
@@ -145,6 +150,40 @@ static void loadPureDarkenLadder() {
   }
 }
 
+// DC-balance ghost test (phase D). Cycle paint/erase of a level on the
+// LEFT half only; the right half stays virgin. If removes are charge-
+// matched the two halves' ledgers are identical afterwards, and a uniform
+// probe grey ('u') renders seamlessly across the midline. An unbalanced
+// remove leaves the cycled half charge-shifted — the probe shows a ghost
+// boundary at x = W/2.
+static void ghostCycles(int level, int cycles) {
+  epd.clear();
+  for (int n = 0; n < cycles; n++) {
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++)
+        fb[(size_t)y * W + x] = (x < W / 2) ? (uint8_t)level : 0;
+    show();
+    memset(fb, 0, (size_t)W * H);
+    show();
+    Serial.printf("[grey16] ghost cycle %d/%d\n", n + 1, cycles);
+  }
+}
+
+// Control arm: the phase C formula removes (pure whiten runs, full+3 with
+// margin — optically fine, NOT charge-matched). Lets a ghost run measure
+// the imbalance the tuned removes are supposed to eliminate.
+static void loadFormulaRemoves() {
+  uint8_t t[13];
+  for (int g = 1; g <= 15; g++) {
+    const int dose = (g * 2 * 13 + 7) / 15;
+    int wh = dose / 2 + 3;
+    if (wh > 13) wh = 13;
+    memset(t, 0, sizeof(t));
+    for (int p = 0; p < wh; p++) t[p] = 2;
+    epd.setDecisionTrain((uint8_t)((g << 1) | 1), t);
+  }
+}
+
 void loop() {
   if (!Serial.available()) { delay(20); return; }
   switch (Serial.read()) {
@@ -159,6 +198,32 @@ void loop() {
       Serial.println("[grey16] pure-darken dose probe (bars 1..13 = 1..13 passes)");
       break;
     case 'm': drawMatchCard(); show(); Serial.println("[grey16] match card"); break;
+    case 'g': {
+      // g <level> <cycles>   paint/erase LEFT half N times, end white
+      const int level  = Serial.parseInt();
+      const int cycles = Serial.parseInt();
+      if (level >= 1 && level <= 15 && cycles >= 1 && cycles <= 200) {
+        ghostCycles(level, cycles);
+        Serial.printf("[grey16] ghost done: L%d x%d, screen white\n", level, cycles);
+      } else Serial.println("[grey16] bad ghost args");
+    } break;
+    case 'u': {
+      // u <level>   uniform full-screen probe grey
+      const int level = Serial.parseInt();
+      if (level >= 0 && level <= 15) {
+        memset(fb, (uint8_t)level, (size_t)W * H);
+        show();
+        Serial.printf("[grey16] uniform L%d\n", level);
+      } else Serial.println("[grey16] bad level");
+    } break;
+    case 'F':
+      loadFormulaRemoves();
+      Serial.println("[grey16] FORMULA removes loaded (unbalanced control)");
+      break;
+    case 'M':
+      loadTunedTrains(epd);
+      Serial.println("[grey16] charge-matched trains loaded");
+      break;
     case 't': {
       // t <id> <13 codes 0-3>   e.g.  t 4 1112000000000
       const int id = Serial.parseInt();

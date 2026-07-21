@@ -162,6 +162,33 @@ per-call, so per-line tables cost nothing).
   phase D: remove-train tuning, HIGH quality, temperature bands, the
   M5PaperS3's own table, and a home for per-board 16-grey tables in the
   preset system.
+
+  **Charge-matched removes, 21 July 2026 (LilyGo T5 S3 GPS, NORMAL).**
+  The DC audit found paint+unpaint cycles were not balanced: the formula
+  removes overdrove white by 3..8 passes per cycle. Under the constant
+  pass period charge is simply darkens − whitens per train, so the fix
+  is a remove train satisfying TWO constraints: land optically white AND
+  net whitens = the apply's net darkens. The imbalance is optically real,
+  not just ledger-keeping: a half-screen ghost test (cycle paint/erase of
+  L12 on the left half 20x, then paint a uniform L7 probe over the whole
+  glass) put a 4-scan-unit seam at the midline with the formula removes —
+  over-whitened glass answers the next darken train a full grey step
+  stronger (the fresh-response physics again). The ghost decays within
+  minutes of a clear, so it is a transient artefact plus a long-term
+  panel-health liability, not permanent damage per cycle.
+
+  Tuning used a remove ladder: paint the staircase, erase to white,
+  scan residuals per bar against a hard-clear reference (column-wise, so
+  illumination cancels). Two shape lessons: appended charge-neutral
+  (darken, whiten) scrub pairs erase NOTHING — the darken undoes its
+  whiten's gain almost exactly; what works is the darkens FIRST, then
+  all whitens — deepen toward saturation where darkens are optically
+  cheap, then every whiten fires from a dark state where it is strong
+  (drive-to-opposite-rail activation, at zero extra net charge). All 15
+  removes now land within 1.5 scan units of clear-white at exactly the
+  matched net. Gate: the 20-cycle ghost test dropped from a −4.0 seam
+  (formula) to −1.1 (matched), at the measurement noise floor; white
+  state lands −0.6. Tuned set in the same header as the applies.
 - **Phase D — calibration**: scanner rig + dithertune extended to tune 32
   trains per board (HIGH first). Gate: optical match of all 16 levels
   against dither references.

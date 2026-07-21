@@ -19,9 +19,12 @@ by batching per-line decisions into OR-merged sweeps.
 
 ## What to expect
 
-Phase C ships a *formula* train library — levels should be distinguishable
-and monotonic, but not evenly spaced or colour-accurate. Even spacing comes
-from the flatbed-scanner calibration in phase D.
+The sketch loads the scanner-tuned LilyGo T5 S3 GPS NORMAL train set
+(`tuned_trains_lilygo_t5s3.h`): apply trains matched against Bayer-dithered
+black/white references, and charge-matched remove trains (unpainting a
+level returns its net DC charge to zero — see the phase D notes in
+`DECISION_ENGINE.md`). On other boards the levels will be in order but not
+colour-accurate until the match-card loop is run for that panel.
 
 Quality must be `QUALITY_NORMAL` or `QUALITY_HIGH`; 16-grey mode refuses
 `QUALITY_FAST` (7 undelayed passes cannot resolve 16 doses).
@@ -34,3 +37,10 @@ Quality must be `QUALITY_NORMAL` or `QUALITY_HIGH`; 16-grey mode refuses
 | `w` | quantised wedge |
 | `i` | staircase, black → white |
 | `c` | hard clear |
+| `p` | pure-darken dose probe (raw response ladder) |
+| `m` | match card: dithered references above, native levels below |
+| `t <id> <13 codes>` | upload one train (codes 0–3 per pass) |
+| `g <level> <cycles>` | DC ghost test: cycle paint/erase on the left half |
+| `u <level>` | uniform full-screen level (probe grey / erase) |
+| `F` / `M` | load formula removes (unbalanced control) / tuned trains |
+| `H` / `N` | quality high / normal |
