@@ -704,8 +704,19 @@ void EPD_Painter::powerOn() {
   // full of float codes — exactly the state v1.1.0's per-paint closing
   // scan used to guarantee.
   if (dma_buffer) {
+    // Rails need real settle time before the chain clocks reliably; the
+    // pin driver only guarantees 100us.
+    EPD_DELAY_MS(5);
     memset(dma_buffer1, 0x00, packed_row_bytes);
     memset(dma_buffer2, 0x00, packed_row_bytes);
+    // Re-arm the source driver's line-start logic. SPH is held asserted
+    // (low) for the panel's whole powered life, so its position state
+    // machine is never re-synchronised after a rail ramp — the one thing
+    // a data flush can't fix. Deassert for a full row of clocks to sweep
+    // the start token out, then reassert so it re-enters at column 0.
+    _pin_sph->set(true);   // deassert: no start token while we clock
+    _pushRow();
+    _pin_sph->set(false);  // reassert: token re-enters at column 0
     _pushRow();
     _pushRow();
   }
