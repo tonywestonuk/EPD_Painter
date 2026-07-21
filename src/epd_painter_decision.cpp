@@ -246,7 +246,7 @@ void EPD_Painter::_decision_discover16_row(int row) {
   // appended after the apply sweeps at row end.
   LineSweep tmpR[5];
   int ndecA = 0, ndecR = 0;
-  uint32_t todo = 0, gg = 0;
+  uint32_t todo = 0;
 
   const int chunks = _config.width / 64;             // 64 px = 32 bytes at 4bpp
   for (int c = 0; c < chunks; c++) {
@@ -271,10 +271,11 @@ void EPD_Painter::_decision_discover16_row(int row) {
         uint8_t idbuf[2]; int nids = 0;
         if (sv) idbuf[nids++] = (uint8_t)((sv << 1) | 1); // remove(screen)
         if (nv) idbuf[nids++] = (uint8_t)(nv << 1);       // apply(new)
-        // Mark both of a grey-to-grey pixel's ids: its remove sets the
-        // frame's partition point R, and only marked applies shift by R
-        // — fresh draws onto white keep firing from pass 0.
-        if (sv && nv) gg |= (1u << ((sv << 1) | 1)) | (1u << (nv << 1));
+        // Record the grey-to-grey PAIRING: each apply id shifts by the
+        // longest remove among its own from-partners this frame — not a
+        // global R — so a deep erase somewhere doesn't stall shallow
+        // transitions elsewhere. Fresh draws onto white never shift.
+        if (sv && nv) dec_gg_from[nv] |= (uint16_t)(1u << sv);
         sbyte = (uint8_t)((sbyte & ~(15 << shift)) | (nv << shift));
 
         for (int k = 0; k < nids; k++) {
@@ -325,12 +326,11 @@ void EPD_Painter::_decision_discover16_row(int row) {
   for (int s = 0; s < nR; s++) ls[nA + s] = tmpR[s];
   dec_todo[row]    = todo;
   dec_nsweeps[row] = (uint8_t)(nA + nR);
-  dec_gg |= gg;
 }
 
 uint32_t EPD_Painter::_decision_discover16() {
   uint32_t any_work = 0;
-  dec_gg = 0;
+  memset(dec_gg_from, 0, sizeof(dec_gg_from));
   for (int row = 0; row < _config.height; row++) {
     _decision_discover16_row(row);
     any_work |= dec_nsweeps[row];

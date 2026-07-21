@@ -1039,29 +1039,32 @@ void EPD_Painter::_paint_task_body() {
 
       // Temporal partition (DECISION_ENGINE.md "direct grey-to-grey"):
       // a grey-to-grey pixel took BOTH a remove and an apply this frame.
-      // R = the longest remove train among those pixels; their removes
-      // fully erase during passes 0..R-1 and every apply train shifts
-      // right by R so it starts from erased glass. The two trains never
-      // drive the same pass, so the pixel's two sweeps OR safely. DC
-      // composes from the tuned tables: -Q(from) + Q(to). Frames without
-      // grey-to-grey keep R = 0 and pay nothing.
-      int R = 0;
-      for (int id = 3; id < DEC_IDS; id += 2) {
-        if (!(dec_gg & inplay & (1u << id)) || !dec_train[id]) continue;
-        for (int p = R; p < DEC_WF_LEN16; p++)
-          if (dec_train[id][p]) R = p + 1;
-      }
-      if (R > 0) {
-        // Shift only the apply ids grey-to-grey pixels actually use —
-        // an id shared with fresh draws still shifts (one train per id),
-        // those pixels just complete a little later.
-        for (int id = 2; id < DEC_IDS; id += 2) {
-          if (!(dec_gg & inplay & (1u << id)) || !dec_train[id]) continue;
-          uint8_t *sh = dec_shifted[id];
+      // Its remove fully erases first, then its apply drives from erased
+      // glass — so each apply id shifts right by the longest remove
+      // among ITS OWN from-partners this frame (a deep erase elsewhere
+      // never stalls a shallow transition: 15->3 costs 13+3 passes
+      // without dragging 3->15 to 26). Disjoint pass ranges keep the
+      // pixel's two sweeps OR-safe; DC composes -Q(from) + Q(to) from
+      // the tuned tables. Frames without grey-to-grey shift nothing.
+      for (int to = 1; to <= 15; to++) {
+        const uint16_t fromset = dec_gg_from[to];
+        if (!fromset) continue;
+        const int aid = to << 1;
+        if (!(inplay & (1u << aid)) || !dec_train[aid]) continue;
+        int R = 0;
+        for (int f = 1; f <= 15; f++) {
+          if (!(fromset & (1u << f))) continue;
+          const uint8_t *rt = dec_train[(f << 1) | 1];
+          if (!rt) continue;
+          for (int p = R; p < DEC_WF_LEN16; p++)
+            if (rt[p]) R = p + 1;
+        }
+        if (R > 0) {
+          uint8_t *sh = dec_shifted[aid];
           memset(sh, 0, R);
-          memcpy(sh + R, dec_train[id], DEC_WF_LEN16);
-          dec_train[id] = sh;
-          dec_len[id] = (uint8_t)(R + DEC_WF_LEN16);
+          memcpy(sh + R, dec_train[aid], DEC_WF_LEN16);
+          dec_train[aid] = sh;
+          dec_len[aid] = (uint8_t)(R + DEC_WF_LEN16);
         }
       }
 

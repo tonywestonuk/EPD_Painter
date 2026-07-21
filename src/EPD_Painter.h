@@ -403,10 +403,11 @@ private:
   uint8_t   *dec_spill            = nullptr;  // (DEC_MAX_SWEEPS16-2) slot planes
   LineSweep *dec_sweeps16         = nullptr;  // [height * DEC_MAX_SWEEPS16]
   uint8_t    dec_trains16[DEC_IDS][DEC_WF_LEN16];
-  // Temporal partition state: remove ids taken by grey-to-grey pixels
-  // this frame (set by discovery), and the per-frame scratch that holds
-  // apply trains shifted right by R (R = longest such remove).
-  uint32_t   dec_gg = 0;
+  // Temporal partition state: dec_gg_from[to] = bitmask of from-levels
+  // that transitioned to `to` this frame (set by discovery). Each apply
+  // id shifts by the longest remove among ITS OWN from-partners — not a
+  // global R — into the per-frame dec_shifted scratch.
+  uint16_t   dec_gg_from[16];
   uint8_t    dec_shifted[DEC_IDS][DEC_WF_LEN_DIR];
   bool       _grey16 = false;
   uint32_t _decision_discover16();
