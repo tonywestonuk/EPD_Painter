@@ -137,6 +137,15 @@ struct PowerCtlConfig {
 
       Shift shift;
 
+      // 16-grey constant pass period per quality (microseconds). The pass
+      // loop pads every pass to this so retention dose depends only on the
+      // trains, and the trains are calibrated AT this period — so it is
+      // per-board: it must exceed the board's worst-case row loop plus the
+      // quality's settle floor. Boards whose control lines ride a shift
+      // register (H716) have much slower rows and need a longer period.
+      int g16_pass_us_normal = 15000;
+      int g16_pass_us_high   = 19000;
+
       // Returns a copy of this config with rotation set — lets you write:
       //   EPD_PainterAdafruit epd(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
       Config withRotation(Rotation r) const { Config c = *this; c.rotation = r; return c; }

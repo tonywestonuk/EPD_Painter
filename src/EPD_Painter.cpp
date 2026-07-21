@@ -1156,7 +1156,8 @@ void EPD_Painter::_paint_task_body() {
         if (elapsed > _g16_rowloop_max) _g16_rowloop_max = elapsed;
 #endif
         const int64_t period = (_config.quality == Quality::QUALITY_HIGH)
-                                   ? DEC_PASS_US16_HIGH : DEC_PASS_US16_NORMAL;
+                                   ? _config.g16_pass_us_high
+                                   : _config.g16_pass_us_normal;
         const int64_t settle_floor =
             (_config.quality == Quality::QUALITY_HIGH) ? 8000 : 4000;
         int64_t pad = period - elapsed;
@@ -1174,7 +1175,7 @@ void EPD_Painter::_paint_task_body() {
       printf("[grey16] pass row-loop %lld..%lld us (period %d us)\n",
              (long long)_g16_rowloop_min, (long long)_g16_rowloop_max,
              (int)(_config.quality == Quality::QUALITY_HIGH
-                       ? DEC_PASS_US16_HIGH : DEC_PASS_US16_NORMAL));
+                       ? _config.g16_pass_us_high : _config.g16_pass_us_normal));
 #endif
 #ifdef EPD_ASM_TIMING
     printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
