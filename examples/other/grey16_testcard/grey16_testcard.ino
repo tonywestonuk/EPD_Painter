@@ -36,6 +36,7 @@ EPD_Painter epd(EPD_PAINTER_PRESET);
 
 static uint8_t *fb;
 static int W, H;
+static bool mode16 = true;   // '4'/'6' switch between 4-level and 16-grey
 
 // Paint twice: erased grey-to-grey pixels are redrawn on the second call
 // (the engine's two-step transition — see DECISION_ENGINE.md).
@@ -156,10 +157,22 @@ static void loadPureDarkenLadder() {
 // overlaps driving the current one — the loop measures true engine
 // throughput. Patch motion exercises apply, remove AND grey-to-grey
 // (overlap) decisions every frame.
-static void perfTest(int frames) {
+// ncol = palette size (levels spread evenly 0..maxlv); maxlv < 15 keeps
+// the longest train in play short, so the pass loop truncates and the
+// frame gets cheaper — the decision engine's cost scales with the content.
+// In 4-level mode the palette is the engine's own 0..3.
+static void perfTest(int frames, int ncol, int maxlv) {
   struct Patch { int x, y, vx, vy; };
   static Patch p[16];
   const int PW = 110, PH = 110;
+  uint8_t lv[16], border;
+  if (mode16) {
+    for (int i = 0; i < 16; i++) lv[i] = (uint8_t)(((i % ncol) * maxlv) / (ncol - 1));
+    border = (uint8_t)maxlv;
+  } else {
+    for (int i = 0; i < 16; i++) lv[i] = (uint8_t)(i % 4);
+    border = 3;
+  }
   for (int i = 0; i < 16; i++) {
     p[i].x = (i % 4) * (W - PW) / 3;
     p[i].y = (i / 4) * (H - PH) / 3;
@@ -180,11 +193,11 @@ static void perfTest(int frames) {
     for (int i = 0; i < 16; i++) {
       for (int y = 0; y < PH; y++) {
         uint8_t *row = fb + (size_t)(p[i].y + y) * W + p[i].x;
-        if (y < 3 || y >= PH - 3) memset(row, 15, PW);
+        if (y < 3 || y >= PH - 3) memset(row, border, PW);
         else {
-          row[0] = row[1] = row[2] = 15;
-          row[PW - 3] = row[PW - 2] = row[PW - 1] = 15;
-          memset(row + 3, i, PW - 6);
+          row[0] = row[1] = row[2] = border;
+          row[PW - 3] = row[PW - 2] = row[PW - 1] = border;
+          memset(row + 3, lv[i], PW - 6);
         }
       }
     }
@@ -194,9 +207,11 @@ static void perfTest(int frames) {
                     (f + 1) * 1000.0f / (millis() - t0));
   }
   const uint32_t dt = millis() - t0;
-  Serial.printf("[grey16] perf done: %d frames, %lu ms, %.2f fps (%.0f ms/frame)\n",
-                frames, (unsigned long)dt, frames * 1000.0f / dt,
-                (float)dt / frames);
+  Serial.printf("[grey16] perf done (%s, %d colours, max level %d): "
+                "%d frames, %lu ms, %.2f fps (%.0f ms/frame)\n",
+                mode16 ? "16-grey" : "4-level", mode16 ? ncol : 4,
+                mode16 ? maxlv : 3, frames, (unsigned long)dt,
+                frames * 1000.0f / dt, (float)dt / frames);
 }
 
 // DC-balance ghost test (phase D). Cycle paint/erase of a level on the
@@ -248,12 +263,27 @@ void loop() {
       break;
     case 'm': drawMatchCard(); show(); Serial.println("[grey16] match card"); break;
     case 'x': {
-      // x <frames>   bouncing-patch performance test
+      // x <frames> [ncol] [maxlv]   bouncing-patch performance test
       int frames = Serial.parseInt();
+      int ncol   = Serial.parseInt();
+      int maxlv  = Serial.parseInt();
       if (frames < 1) frames = 60;
       if (frames > 2000) frames = 2000;
-      perfTest(frames);
+      if (ncol < 2 || ncol > 16) ncol = 16;
+      if (maxlv < 1 || maxlv > 15) maxlv = 15;
+      perfTest(frames, ncol, maxlv);
     } break;
+    case '4':
+      if (epd.setGreyLevels(4)) { mode16 = false; Serial.println("[grey16] 4-level mode"); }
+      else Serial.println("[grey16] setGreyLevels(4) failed");
+      break;
+    case '6':
+      if (epd.setGreyLevels(16)) {
+        mode16 = true;
+        loadTunedTrains(epd);
+        Serial.println("[grey16] 16-grey mode");
+      } else Serial.println("[grey16] setGreyLevels(16) failed");
+      break;
     case 'g': {
       // g <level> <cycles>   paint/erase LEFT half N times, end white
       const int level  = Serial.parseInt();
@@ -301,6 +331,10 @@ void loop() {
     case 'H':
       epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
       Serial.println("[grey16] QUALITY_HIGH");
+      break;
+    case 'f':
+      epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
+      Serial.println("[grey16] QUALITY_FAST (4-level mode only)");
       break;
     case 'N':
       epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);

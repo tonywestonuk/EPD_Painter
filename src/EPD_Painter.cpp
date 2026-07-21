@@ -888,6 +888,25 @@ void EPD_Painter::_paint_task_body() {
       for (int id = 8; id < DEC_IDS; id++) dec_train[id] = nullptr;
     }
 
+    // Pass count = length of the longest train in play (DECISION_ENGINE.md).
+    // Passes beyond every active train's last non-float code drive nothing;
+    // skipping them costs no dose fidelity because each executed pass keeps
+    // its exact constant period, and every pixel's final drive still gets a
+    // full-period window before the next latch. dec_todo holds the frame's
+    // decision ids from discovery. 4-level mode keeps its calibrated fixed
+    // pass count.
+    if (_grey16) {
+      uint32_t inplay = 0;
+      for (int row = 0; row < _config.height; row++) inplay |= dec_todo[row];
+      int need = 1;
+      for (int id = 2; id < DEC_IDS; id++) {
+        if (!(inplay & (1u << id)) || !dec_train[id]) continue;
+        for (int p = 0; p < wf_len; p++)
+          if (dec_train[id][p] && p >= need) need = p + 1;
+      }
+      wf_len = need;
+    }
+
     // The pass loop consumes per-line sweep lists: a sweep = one staged
     // 2bpp slot plane + a chunk mask + 3 decision ids naming the waveform
     // train each slot indexes. The engine ORs a line's sweeps into the row
