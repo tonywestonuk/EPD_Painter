@@ -161,46 +161,57 @@ static void loadPureDarkenLadder() {
 // the longest train in play short, so the pass loop truncates and the
 // frame gets cheaper — the decision engine's cost scales with the content.
 // In 4-level mode the palette is the engine's own 0..3.
-static void perfTest(int frames, int ncol, int maxlv) {
-  struct Patch { int x, y, vx, vy; };
-  static Patch p[16];
-  const int PW = 110, PH = 110;
-  uint8_t lv[16], border;
+struct Patch { int x, y, vx, vy; };
+static Patch patches[16];
+static uint8_t patchLv[16], patchBorder;
+static const int PW = 110, PH = 110;
+
+static void patchesInit(int ncol, int maxlv) {
   if (mode16) {
-    for (int i = 0; i < 16; i++) lv[i] = (uint8_t)(((i % ncol) * maxlv) / (ncol - 1));
-    border = (uint8_t)maxlv;
+    for (int i = 0; i < 16; i++)
+      patchLv[i] = (uint8_t)(((i % ncol) * maxlv) / (ncol - 1));
+    patchBorder = (uint8_t)maxlv;
   } else {
-    for (int i = 0; i < 16; i++) lv[i] = (uint8_t)(i % 4);
-    border = 3;
+    for (int i = 0; i < 16; i++) patchLv[i] = (uint8_t)(i % 4);
+    patchBorder = 3;
   }
   for (int i = 0; i < 16; i++) {
-    p[i].x = (i % 4) * (W - PW) / 3;
-    p[i].y = (i / 4) * (H - PH) / 3;
-    p[i].vx = ((i % 5) + 4) * ((i & 1) ? -1 : 1);
-    p[i].vy = (((i * 3) % 5) + 4) * ((i & 2) ? -1 : 1);
+    patches[i].x = (i % 4) * (W - PW) / 3;
+    patches[i].y = (i / 4) * (H - PH) / 3;
+    patches[i].vx = ((i % 5) + 4) * ((i & 1) ? -1 : 1);
+    patches[i].vy = (((i * 3) % 5) + 4) * ((i & 2) ? -1 : 1);
   }
+}
+
+static void patchesRender() {
+  for (int i = 0; i < 16; i++) {
+    Patch &q = patches[i];
+    q.x += q.vx; q.y += q.vy;
+    if (q.x < 0)      { q.x = 0;      q.vx = -q.vx; }
+    if (q.y < 0)      { q.y = 0;      q.vy = -q.vy; }
+    if (q.x > W - PW) { q.x = W - PW; q.vx = -q.vx; }
+    if (q.y > H - PH) { q.y = H - PH; q.vy = -q.vy; }
+  }
+  memset(fb, 0, (size_t)W * H);
+  for (int i = 0; i < 16; i++) {
+    for (int y = 0; y < PH; y++) {
+      uint8_t *row = fb + (size_t)(patches[i].y + y) * W + patches[i].x;
+      if (y < 3 || y >= PH - 3) memset(row, patchBorder, PW);
+      else {
+        row[0] = row[1] = row[2] = patchBorder;
+        row[PW - 3] = row[PW - 2] = row[PW - 1] = patchBorder;
+        memset(row + 3, patchLv[i], PW - 6);
+      }
+    }
+  }
+}
+
+static void perfTest(int frames, int ncol, int maxlv) {
+  patchesInit(ncol, maxlv);
   epd.clear();
   const uint32_t t0 = millis();
   for (int f = 0; f < frames; f++) {
-    for (int i = 0; i < 16; i++) {
-      p[i].x += p[i].vx; p[i].y += p[i].vy;
-      if (p[i].x < 0)      { p[i].x = 0;      p[i].vx = -p[i].vx; }
-      if (p[i].y < 0)      { p[i].y = 0;      p[i].vy = -p[i].vy; }
-      if (p[i].x > W - PW) { p[i].x = W - PW; p[i].vx = -p[i].vx; }
-      if (p[i].y > H - PH) { p[i].y = H - PH; p[i].vy = -p[i].vy; }
-    }
-    memset(fb, 0, (size_t)W * H);
-    for (int i = 0; i < 16; i++) {
-      for (int y = 0; y < PH; y++) {
-        uint8_t *row = fb + (size_t)(p[i].y + y) * W + p[i].x;
-        if (y < 3 || y >= PH - 3) memset(row, border, PW);
-        else {
-          row[0] = row[1] = row[2] = border;
-          row[PW - 3] = row[PW - 2] = row[PW - 1] = border;
-          memset(row + 3, lv[i], PW - 6);
-        }
-      }
-    }
+    patchesRender();
     epd.paint(fb);
     if ((f + 1) % 20 == 0)
       Serial.printf("[grey16] perf %d/%d: %.2f fps\n", f + 1, frames,
@@ -212,6 +223,34 @@ static void perfTest(int frames, int ncol, int maxlv) {
                 mode16 ? "16-grey" : "4-level", mode16 ? ncol : 4,
                 mode16 ? maxlv : 3, frames, (unsigned long)dt,
                 frames * 1000.0f / dt, (float)dt / frames);
+}
+
+// paintLater throughput. paintLater() frameskips — a submit loop faster
+// than the panel just overwrites the pending buffer and only the latest
+// render is painted — so the effective rate is the paint task's completed
+// drive cycles (paintsCompleted()) over wall time, never the submit rate.
+static void perfLater(int secs, int ncol, int maxlv) {
+  patchesInit(ncol, maxlv);
+  epd.clear();
+  const uint32_t p0 = epd.paintsCompleted();
+  const uint32_t t0 = millis();
+  uint32_t submitted = 0;
+  while (millis() - t0 < (uint32_t)secs * 1000) {
+    patchesRender();
+    epd.paintLater(fb);
+    submitted++;
+  }
+  while (!epd.paintIdle()) delay(5);       // drain pending work + mop-up
+  const uint32_t dt = millis() - t0;
+  const uint32_t painted = epd.paintsCompleted() - p0;
+  Serial.printf("[grey16] paintLater perf (%s, %d colours, max level %d): "
+                "%lu submitted, %lu painted in %lu ms = %.2f painted fps "
+                "(submit loop %.1f fps, %lu frames skipped)\n",
+                mode16 ? "16-grey" : "4-level", mode16 ? ncol : 4,
+                mode16 ? maxlv : 3, (unsigned long)submitted,
+                (unsigned long)painted, (unsigned long)dt,
+                painted * 1000.0f / dt, submitted * 1000.0f / dt,
+                (unsigned long)(submitted - painted));
 }
 
 // DC-balance ghost test (phase D). Cycle paint/erase of a level on the
@@ -272,6 +311,17 @@ void loop() {
       if (ncol < 2 || ncol > 16) ncol = 16;
       if (maxlv < 1 || maxlv > 15) maxlv = 15;
       perfTest(frames, ncol, maxlv);
+    } break;
+    case 'y': {
+      // y <seconds> [ncol] [maxlv]   paintLater throughput test
+      int secs  = Serial.parseInt();
+      int ncol  = Serial.parseInt();
+      int maxlv = Serial.parseInt();
+      if (secs < 1) secs = 15;
+      if (secs > 120) secs = 120;
+      if (ncol < 2 || ncol > 16) ncol = 16;
+      if (maxlv < 1 || maxlv > 15) maxlv = 15;
+      perfLater(secs, ncol, maxlv);
     } break;
     case '4':
       if (epd.setGreyLevels(4)) { mode16 = false; Serial.println("[grey16] 4-level mode"); }

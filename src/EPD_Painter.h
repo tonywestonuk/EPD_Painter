@@ -196,6 +196,13 @@ struct PowerCtlConfig {
   void paintPacked(const uint8_t* packed, int line_repeat = 1);
   void unpaintPacked(const uint8_t* packed);
   void paintLater(uint8_t* framebuffer);
+
+  // Completed drive cycles since begin(). paintLater() drops frames when
+  // submissions outpace the panel (only the latest render is painted), so
+  // effective paint rate = delta of this counter over wall time, never the
+  // submit-loop rate. No-op cycles (nothing changed) are not counted.
+  uint32_t paintsCompleted() const { return _paints_done.load(); }
+  bool paintIdle() const { return paintStage.load() == 0; }
   // No-op, kept for API compatibility. Interlace mode existed to spatially
   // dither the old either-direction-per-chunk deferral artifact; the
   // dual-plane ink engine drives both directions per pixel in one cycle,
@@ -338,6 +345,7 @@ private:
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
+  std::atomic<uint32_t> _paints_done{0};
   bool shouldSkipRow = false;
   bool _autoShutdown = true;
   EPD_PainterShutdown* _shutdown = nullptr;

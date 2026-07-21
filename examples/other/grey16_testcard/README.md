@@ -41,6 +41,7 @@ Quality must be `QUALITY_NORMAL` or `QUALITY_HIGH`; 16-grey mode refuses
 | `m` | match card: dithered references above, native levels below |
 | `t <id> <13 codes>` | upload one train (codes 0–3 per pass) |
 | `x <frames> [ncol] [maxlv]` | perf test: 16 bouncing patches over an ncol-colour palette spread 0..maxlv, reports fps |
+| `y <seconds> [ncol] [maxlv]` | paintLater throughput: saturating submit loop; reports painted fps vs submit fps (paintLater frameskips) |
 | `4` / `6` | switch to 4-level / 16-grey mode |
 | `f` | `QUALITY_FAST` (4-level mode only — the speed mode) |
 | `g <level> <cycles>` | DC ghost test: cycle paint/erase on the left half |

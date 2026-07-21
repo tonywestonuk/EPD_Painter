@@ -1004,7 +1004,7 @@ void EPD_Painter::_paint_task_body() {
       sendRow(row == 0, row == _config.height - 1);
     }
 
-
+    _paints_done.fetch_add(1);
   }
 }
 
