@@ -937,10 +937,40 @@ void EPD_Painter::_paint_task_body() {
     if (_grey16) {
       uint32_t inplay = 0;
       for (int row = 0; row < _config.height; row++) inplay |= dec_todo[row];
+
+      // Temporal partition (DECISION_ENGINE.md "direct grey-to-grey"):
+      // a grey-to-grey pixel took BOTH a remove and an apply this frame.
+      // R = the longest remove train among those pixels; their removes
+      // fully erase during passes 0..R-1 and every apply train shifts
+      // right by R so it starts from erased glass. The two trains never
+      // drive the same pass, so the pixel's two sweeps OR safely. DC
+      // composes from the tuned tables: -Q(from) + Q(to). Frames without
+      // grey-to-grey keep R = 0 and pay nothing.
+      int R = 0;
+      for (int id = 3; id < DEC_IDS; id += 2) {
+        if (!(dec_gg & inplay & (1u << id)) || !dec_train[id]) continue;
+        for (int p = R; p < DEC_WF_LEN16; p++)
+          if (dec_train[id][p]) R = p + 1;
+      }
+      if (R > 0) {
+        // Shift only the apply ids grey-to-grey pixels actually use —
+        // an id shared with fresh draws still shifts (one train per id),
+        // those pixels just complete a little later.
+        for (int id = 2; id < DEC_IDS; id += 2) {
+          if (!(dec_gg & inplay & (1u << id)) || !dec_train[id]) continue;
+          uint8_t *sh = dec_shifted[id];
+          memset(sh, 0, R);
+          memcpy(sh + R, dec_train[id], DEC_WF_LEN16);
+          dec_train[id] = sh;
+          dec_len[id] = (uint8_t)(R + DEC_WF_LEN16);
+        }
+      }
+
       int need = 1;
       for (int id = 2; id < DEC_IDS; id++) {
         if (!(inplay & (1u << id)) || !dec_train[id]) continue;
-        for (int p = 0; p < wf_len; p++)
+        const int len = dec_len[id];
+        for (int p = 0; p < len; p++)
           if (dec_train[id][p] && p >= need) need = p + 1;
       }
       wf_len = need;

@@ -213,41 +213,78 @@ coexist in the todo word; a batcher that places remove-decisions in
 earlier sweeps completes the transition in one paint. The last deferral
 in the engine goes away.
 
-## Next: direct grey-to-grey transitions (agreed 21 July 2026)
+## Direct grey-to-grey transitions (implemented 21 July 2026)
 
 Motivated by the megademo's bouncing-title artifact (Tony's diagnosis:
 black text descending into its own grey drop-shadow — every grey-to-grey
 pixel two-steps through white, punching visible holes; ascending runs
-the same physics at invisible contrast). The gap: the LUTs only know
+the same physics at invisible contrast). The gap: the LUTs only knew
 trajectories from and to white. The generalization the engine was built
-for: **decision = (from, to)**, not (level, direction).
+for: **decision = (from, to)**, not (level, direction). Both tiers are
+in and gated on the M5PaperS3.
 
-Two-tier plan:
+**4-level tier: six tuned direct trains.** `setDirectTransitions(true)`
+switches 4-level paints to a greedy-sweep discovery over the 2bpp
+buffers (the 16-grey walk's shape); a changed occupied pixel whose
+(from, to) pair has a loaded train (`setDirectTrain`) takes one direct
+decision — id `16 | (from << 2) | to` — and the screen state lands on
+the new value in ONE paint. Unloaded pairs fall back to the legacy
+two-step, so the engine comes up one tuned pair at a time. Worst case
+12 distinct decisions on a line = 4 sweeps (2 spill slot planes,
+~260 KB PSRAM, allocated on first enable).
 
-- **4-level mode: six direct trains** — (1→2),(1→3),(2→3) darken more
-  from a known grey; (3→2),(3→1),(2→1) whiten-then-redarken landing ON a
-  grey (the mixed-polarity shapes the 16-grey tuning already proved).
-  Six new decision ids; discovery emits direct(sv→nv) for changed
-  occupied pixels (the C path holds both values; the compat split into
-  dark/light planes becomes the legacy mode). Calibration: transition
-  card on the rig — paint from-level patches, repaint to-level, match
-  landings against reference patches painted from white. Per board, per
-  quality; FAST's 7 passes may be tight for the lightening trains
-  (NORMAL is safe; the card will say).
+Direct trains may be LONGER than the quality's 13 passes (up to 26):
+the frame extends to the longest direct train in play, content without
+deep transitions pays nothing. This exists because 3→2 provably cannot
+fit its charge AND its landing in 13 passes: net −7 with d trailing
+darkens forces 7+d whitens, capping d at 3 — which stops a full grey
+step short of dark grey. Its tuned train is 17 passes (12 whitens, 5
+fresh darkens).
 
-- **16-grey mode: temporally partitioned trains** — 240 directed pairs
-  is too many to tune, so concatenate instead: all removes drive passes
-  0..R-1, every apply train shifts right by R (R = longest remove in
-  play that frame). One pixel may then hold two decisions in disjoint
-  pass ranges — the OR-merge stays safe because the trains never drive
-  the same pass. Pass count = R + longest apply (truncation already
-  scales it); deep transitions cost more passes, content without
-  grey-to-grey pays nothing.
+Calibration (testcard 'D', the transition-card method): paint every
+column's FROM level, repaint TO in a single paint, compare each
+transition column's landing against a reference column painted from
+white. M5PaperS3 NORMAL set (`direct_trains_m5papers3.h`): all six
+pairs within +3.5/−1.8 scan units of reference. Shape lessons mirror
+the remove work: trailing whitens poison landings (darkening directs
+put their balancing whitens FIRST); darkens after deep whitening ride
+the fresh-response boost (2→1 is a tiny darkens-first erase, 1d,3w);
+a darken followed by one whiten survives at ~1/3 strength — the
+d,w,d,w,d tail on 3→1 is the fine-trim knob.
 
-**DC balance by construction**: define potential Q(g) = the apply
-train's net charge (already measured per board). Every direct train
-must carry exactly Q(to) − Q(from). The ledger becomes path-independent
-— white→2→3→white nets zero along any route.
+**16-grey tier: temporal partition.** 240 directed pairs is too many to
+tune, so the same paint concatenates the two tuned halves: a
+grey-to-grey pixel takes BOTH remove(from) and apply(to); removes drive
+passes 0..R−1 and the apply trains that grey-to-grey pixels use shift
+right by R (R = longest remove among the frame's grey-to-grey pixels;
+fresh draws onto white keep firing from pass 0). One pixel then sits in
+two sweeps with disjoint pass ranges, so the OR-merge stays safe.
+Discovery partitions sweeps by direction (applies planes 0..4 —
+fastbuffer first, fresh draws stay internal; removes planes 5..9)
+because one slot plane cannot encode two decisions for one pixel.
+Pass count = R + longest shifted apply; frames without grey-to-grey
+keep R = 0 and pay nothing.
 
-Gate: the shadowed bouncing logo descending with no via-white holes,
-plus the N-cycle ghost test over mixed transition paths.
+**DC balance by construction**: potential Q(g) = the apply train's net
+charge (measured per board). Every 4-level direct train carries exactly
+Q(to) − Q(from); the 16-grey partition composes −Q(from) + Q(to) from
+the already-matched tables. The ledger is path-independent —
+white→2→3→white nets zero along any route.
+
+**Gates passed (M5PaperS3, 21 July 2026):** the shadowed bouncing logo
+descends with no via-white holes (megademo intro, NORMAL + direct); the
+boing ball's grey-on-grey motion completes per paint (Tony: "much
+better... better slow correct, than fast wrong"). Mixed-path ghost
+(testcard 'G', 20 cycles × 10 transitions through
+white→1→2→3→2→1→white and white→1→3→1→white): immediate-probe seam
+−6.5 for the direct engine vs −9.3 for the legacy two-step on identical
+content — less transient polarization than the status quo, both decay
+to noise within minutes, no persistent imbalance.
+
+Remaining in this area: LilyGo direct set (seeds from the M5Paper
+finals), FAST-quality direct trains if the intro should return to 17
+fps with its shadow (7 undelayed passes may not fit the lightening
+trains), and the in-paint transit flicker of deep lightening directs
+(physics: a 3→1 train must shed 9 charge units and the glass erases
+faster than it discharges, so the pixel overshoots toward white inside
+the paint — contained, but visible at NORMAL cadence).

@@ -234,11 +234,19 @@ void EPD_Painter::_decision_discover16_row(int row) {
   uint8_t       *sb = packed4_screenbuffer + (size_t)row * p4rb;
   LineSweep *ls = &dec_sweeps16[row * DEC_MAX_SWEEPS16];
 
-  int8_t map[DEC_IDS];                               // id -> (sweep<<2)|slot
+  int8_t map[DEC_IDS];                               // id -> (plane<<2)|slot
   memset(map, -1, sizeof(map));
   uint8_t *plane[DEC_MAX_SWEEPS16];
-  int ndec = 0, nsweeps = 0;
-  uint32_t todo = 0;
+  // Sweeps are partitioned by direction: applies fill planes 0..4 (the
+  // fastbuffer first — fresh draws stay in internal RAM), removes fill
+  // planes 5..9. A grey-to-grey pixel holds BOTH a remove and an apply
+  // (temporal partition — disjoint pass ranges, see the pass loop), and
+  // one slot plane can only encode one decision per pixel, so the two
+  // directions may never share a sweep. Remove sweeps are buffered and
+  // appended after the apply sweeps at row end.
+  LineSweep tmpR[5];
+  int ndecA = 0, ndecR = 0;
+  uint32_t todo = 0, gg = 0;
 
   const int chunks = _config.width / 64;             // 64 px = 32 bytes at 4bpp
   for (int c = 0; c < chunks; c++) {
@@ -258,44 +266,71 @@ void EPD_Painter::_decision_discover16_row(int row) {
         const uint8_t nv = (nb    >> shift) & 15;
         const uint8_t sv = (sbyte >> shift) & 15;
         if (nv == sv) continue;
-        const uint8_t id = sv ? (uint8_t)((sv << 1) | 1)   // remove(screen)
-                              : (uint8_t)(nv << 1);        // apply(new)
-        sbyte = sv ? (uint8_t)(sbyte & ~(15 << shift))     // erased -> white
-                   : (uint8_t)(sbyte | (nv << shift));     // drawn  -> nv
+        // Decisions: apply for bare pixels, remove for erases, BOTH for
+        // grey-to-grey — the screen state lands on nv in ONE paint.
+        uint8_t idbuf[2]; int nids = 0;
+        if (sv) idbuf[nids++] = (uint8_t)((sv << 1) | 1); // remove(screen)
+        if (nv) idbuf[nids++] = (uint8_t)(nv << 1);       // apply(new)
+        // Mark both of a grey-to-grey pixel's ids: its remove sets the
+        // frame's partition point R, and only marked applies shift by R
+        // — fresh draws onto white keep firing from pass 0.
+        if (sv && nv) gg |= (1u << ((sv << 1) | 1)) | (1u << (nv << 1));
+        sbyte = (uint8_t)((sbyte & ~(15 << shift)) | (nv << shift));
 
-        int m = map[id];
-        if (m < 0) {                                 // first sighting this row
-          const int s = ndec / 3, slot = ndec % 3;
-          if (slot == 0) {                           // open a new sweep
-            plane[s] = _dec_plane_row(s, row);
-            ls[s].plane_row = plane[s];
-            ls[s].mask = 0;
-            ls[s].dec[0] = ls[s].dec[1] = ls[s].dec[2] = 0;
-            nsweeps = s + 1;
+        for (int k = 0; k < nids; k++) {
+          const uint8_t id = idbuf[k];
+          int m = map[id];
+          if (m < 0) {                               // first sighting this row
+            if (id & 1) {                            // remove: planes 5..9
+              const int s = ndecR / 3, slot = ndecR % 3;
+              if (slot == 0) {
+                plane[5 + s] = _dec_plane_row(5 + s, row);
+                tmpR[s].plane_row = plane[5 + s];
+                tmpR[s].mask = 0;
+                tmpR[s].dec[0] = tmpR[s].dec[1] = tmpR[s].dec[2] = 0;
+              }
+              tmpR[s].dec[slot] = id;
+              m = map[id] = (int8_t)(((5 + s) << 2) | (slot + 1));
+              ndecR++;
+            } else {                                 // apply: planes 0..4
+              const int s = ndecA / 3, slot = ndecA % 3;
+              if (slot == 0) {
+                plane[s] = _dec_plane_row(s, row);
+                ls[s].plane_row = plane[s];
+                ls[s].mask = 0;
+                ls[s].dec[0] = ls[s].dec[1] = ls[s].dec[2] = 0;
+              }
+              ls[s].dec[slot] = id;
+              m = map[id] = (int8_t)((s << 2) | (slot + 1));
+              ndecA++;
+            }
+            todo |= 1u << id;
           }
-          ls[s].dec[slot] = id;
-          m = map[id] = (int8_t)((s << 2) | (slot + 1));
-          ndec++;
-          todo |= 1u << id;
+          const int pi = m >> 2;
+          uint8_t *pl = plane[pi];
+          uint32_t *maskp = (pi >= 5) ? &tmpR[pi - 5].mask : &ls[pi].mask;
+          if (!(*maskp & cbit)) {                    // first touch: float chunk
+            memset(pl + c * 16, 0, 16);
+            *maskp |= cbit;
+          }
+          const int x = c * 64 + b * 2 + h;
+          pl[x >> 2] |= (uint8_t)((m & 3) << ((3 - (x & 3)) * 2));
         }
-        const int s = m >> 2;
-        uint8_t *pl = plane[s];
-        if (!(ls[s].mask & cbit)) {                  // first touch: float chunk
-          memset(pl + c * 16, 0, 16);
-          ls[s].mask |= cbit;
-        }
-        const int x = c * 64 + b * 2 + h;
-        pl[x >> 2] |= (uint8_t)((m & 3) << ((3 - (x & 3)) * 2));
       }
       sb[c * 32 + b] = sbyte;
     }
   }
+  // Pack the sweep list: applies already sit at ls[0..], removes follow.
+  const int nA = (ndecA + 2) / 3, nR = (ndecR + 2) / 3;
+  for (int s = 0; s < nR; s++) ls[nA + s] = tmpR[s];
   dec_todo[row]    = todo;
-  dec_nsweeps[row] = (uint8_t)nsweeps;
+  dec_nsweeps[row] = (uint8_t)(nA + nR);
+  dec_gg |= gg;
 }
 
 uint32_t EPD_Painter::_decision_discover16() {
   uint32_t any_work = 0;
+  dec_gg = 0;
   for (int row = 0; row < _config.height; row++) {
     _decision_discover16_row(row);
     any_work |= dec_nsweeps[row];

@@ -4,7 +4,7 @@
 // Six screens, about two minutes, looping. Every effect is also a feature
 // demonstration:
 //
-//   1 INTRO    copper bars + bouncing logo + sine scroller  (FAST, ~17 fps)
+//   1 INTRO    shadowed bouncing logo + sine scroller  (direct grey-to-grey)
 //   2 BOING    the checkered ball, of course                (delta engine)
 //   3 GREYS    live switch to 16 native greys, plasma       (decision engine)
 //   4 STARS    3D starfield                                 (SIMD + DMA)
@@ -26,6 +26,7 @@
 // Scanner-calibrated 16-grey trains live with the testcard example.
 #include "../grey16_testcard/tuned_trains_lilygo_t5s3.h"
 #include "../grey16_testcard/tuned_trains_m5papers3.h"
+#include "../grey16_testcard/direct_trains_m5papers3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -50,6 +51,14 @@ static void modeGrey16() {         // colours 0..15, ~4 fps, calibrated
   epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
   epd.setGreyLevels(16);
   loadBoardTrains();
+}
+static void modeNormal4Direct() {  // colours 0..3 + direct grey-to-grey
+  epd.setGreyLevels(4);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  epd.setDirectTransitions(true);
+  // Direct trains are tuned for the M5PaperS3 so far; other boards keep
+  // the two-step fallback (which is simply the old behavior).
+  if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3(epd);
 }
 
 // ---------------------------------------------------------------------------
@@ -96,21 +105,21 @@ static const char SCROLL1[] =
 
 static void screenIntro(uint32_t ms) {
   Serial.printf("[demo] screenIntro t=%lu\n", millis());
-  modeFast4();
+  modeNormal4Direct();
   epd.clear();
   const uint32_t t0 = millis();
   int sx = W;                       // scroller x
   for (uint32_t f = 0; millis() - t0 < ms; f++) {
-    // EXPERIMENT: no copper bars — plain white ground, bouncing title.
-    // Does the descent artifact survive without the bars' downward drift?
     memset(fb, 0, (size_t)W * H);
     const int by = 120 + (abs((int)(f * 7 % 220) - 110) * 100) / 110 - 50;
-    // No drop-shadow: the shadow below the text made every descent plough
-    // black letters into their own grey — a grey->grey two-step (erase to
-    // white this paint, redraw next) punching white holes through the
-    // strokes. Ascent only ran the shadow into old text: same physics,
-    // invisible contrast. Tony spotted it. Pure black on white is
-    // single-step in both directions.
+    // The drop-shadow is BACK — this screen is the direct engine's gate.
+    // It used to punch white holes through descending strokes: black
+    // letters ploughing into their own grey shadow was a grey->grey
+    // two-step (erase to white this paint, redraw next). Tony spotted
+    // it. Now every grey-to-grey pixel rides a tuned direct train in
+    // one paint; a clean descent is the proof.
+    drawText("EPD_PAINTER", (W - textWidth("EPD_PAINTER", 10)) / 2 + 8,
+             by + 8, 10, 1);
     drawTextCentred("EPD_PAINTER", by, 10, 3);
     drawTextCentred("M E G A D E M O", by + 100, 4, 3);
     // sine scroller along the bottom
