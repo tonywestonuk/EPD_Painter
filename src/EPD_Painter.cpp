@@ -158,6 +158,12 @@ bool EPD_Painter::setGreyLevels(int levels) {
   const bool on = (levels == 16);
   if (on == _grey16) return true;
 
+  if (_has_template) {
+    printf("[EPD_Painter] setGreyLevels refused while a template is active"
+           " — releaseTemplate() first\n");
+    return false;
+  }
+
   if (on && _config.quality == Quality::QUALITY_FAST) {
     printf("[EPD_Painter] 16-grey needs QUALITY_NORMAL or QUALITY_HIGH\n");
     return false;
@@ -228,6 +234,87 @@ bool EPD_Painter::setDirectTransitions(bool on) {
   }
   _decision_direct = true;
   return true;
+}
+
+// =============================================================================
+// Template layer — a protected high-quality static layer under animation
+// (see the header). The whole feature is one overlay: protected pixels are
+// forced back to their template values in the packed paintbuffer before
+// discovery, so no engine path can ever see them change.
+// =============================================================================
+
+bool EPD_Painter::setTemplate(const uint8_t *fb, Quality quality) {
+  if (!fb) return false;
+  if (_grey16 && quality == Quality::QUALITY_FAST) {
+    printf("[EPD_Painter] template: FAST cannot express 16 greys\n");
+    return false;
+  }
+  if (_has_template) releaseTemplate();
+
+  // Paint the template at ITS quality, then restore the app's.
+  const Quality qsave = _config.quality;
+  _config.quality = quality;
+  paint((uint8_t *)fb);
+  while (!paintIdle()) EPD_DELAY_MS(2);
+  _config.quality = qsave;
+
+  // The screenbuffer now IS the template — copy it and derive the
+  // protection mask (non-white pixels).
+  const size_t bytes =
+      (size_t)_config.width * _config.height / (_grey16 ? 2 : 4);
+  tpl_data = (uint8_t *)heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM);
+  tpl_mask = (uint8_t *)heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM);
+  if (!(tpl_data && tpl_mask)) {
+    printf("[EPD_Painter] template allocation failed\n");
+    if (tpl_data) heap_caps_free(tpl_data);
+    if (tpl_mask) heap_caps_free(tpl_mask);
+    tpl_data = tpl_mask = nullptr;
+    return false;
+  }
+  memcpy(tpl_data, _grey16 ? packed4_screenbuffer : packed_screenbuffer, bytes);
+  for (size_t i = 0; i < bytes; i++) {
+    const uint8_t b = tpl_data[i];
+    uint8_t m = 0;
+    if (_grey16) {
+      if (b & 0xF0) m |= 0xF0;
+      if (b & 0x0F) m |= 0x0F;
+    } else {
+      if (b & 0xC0) m |= 0xC0;
+      if (b & 0x30) m |= 0x30;
+      if (b & 0x0C) m |= 0x0C;
+      if (b & 0x03) m |= 0x03;
+    }
+    tpl_mask[i] = m;
+  }
+  _tpl_grey16   = _grey16;
+  _tpl_quality  = quality;
+  _has_template = true;
+  return true;
+}
+
+void EPD_Painter::releaseTemplate() {
+  if (!_has_template) return;
+
+  // Undo in the quality that painted: erase ONLY the template pixels,
+  // with the template's trains. Everything else on screen is untouched.
+  while (!paintIdle()) EPD_DELAY_MS(2);
+  const Quality qsave = _config.quality;
+  _config.quality = _tpl_quality;
+  _has_template = false;              // stop the overlay for this paint
+
+  xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+  const size_t bytes =
+      (size_t)_config.width * _config.height / (_tpl_grey16 ? 2 : 4);
+  uint8_t *pb = _tpl_grey16 ? packed4_paintbuffer : packed_paintbuffer;
+  for (size_t i = 0; i < bytes; i++) pb[i] &= (uint8_t)~tpl_mask[i];
+  paintStage = 1;                     // clear()'s submission pattern
+  xSemaphoreGive(_paint_buffer_sem);
+  while (!paintIdle()) EPD_DELAY_MS(2);
+
+  _config.quality = qsave;
+  heap_caps_free(tpl_data);
+  heap_caps_free(tpl_mask);
+  tpl_data = tpl_mask = nullptr;
 }
 
 // =============================================================================
@@ -816,6 +903,18 @@ void EPD_Painter::_paint_task_body() {
     // paintbuffer is being read directly; paint()/paintPacked() block on it
     // rather than on paintStage if they arrive mid-sweep.
     xSemaphoreTake(_paint_buffer_sem, portMAX_DELAY);
+    // Template layer: force protected pixels back to their template
+    // values before discovery — every engine path (SIMD, C, direct,
+    // 16-grey) then simply sees them as unchanged.
+    if (_has_template && _tpl_grey16 == _grey16) {
+      const size_t words =
+          (size_t)_config.width * _config.height / (_grey16 ? 2 : 4) / 4;
+      uint32_t *p = (uint32_t *)(_grey16 ? packed4_paintbuffer
+                                         : packed_paintbuffer);
+      const uint32_t *t = (const uint32_t *)tpl_data;
+      const uint32_t *m = (const uint32_t *)tpl_mask;
+      for (size_t i = 0; i < words; i++) p[i] = (p[i] & ~m[i]) | t[i];
+    }
 #ifdef EPD_ASM_TIMING
     const int64_t _ink_t0 = esp_timer_get_time();
 #endif
@@ -1223,6 +1322,13 @@ void EPD_Painter::clear(const Rect* rects, int num_rects, ClearMode mode) {
 
   const bool partial = (rects != nullptr && num_rects > 0);
 
+  // A full clear would erase the template with whatever quality happens
+  // to be current and then scrub it rail-to-rail — release it properly
+  // first (charge-matched unpaint at its own quality). Partial clears
+  // leave the template alone: the overlay repaints any protected pixels
+  // a rect tries to blank, which is exactly what "protected" means.
+  if (_has_template && !partial) releaseTemplate();
+
   PanelPowerGuard guard(*this);
 
   const int prb = _config.width / 4;  // packed row bytes
@@ -1285,6 +1391,26 @@ void EPD_Painter::clear(const Rect* rects, int num_rects, ClearMode mode) {
               int bx1 = (rects[r].x + rects[r].w + 3) / 4;
               if (bx1 > prb) bx1 = prb;
               memset(dma_buffer + bx0, pattern, bx1 - bx0);
+            }
+          }
+          // The hardware phases must not scrub protected template pixels
+          // (the delta unpaint above them is already overlay-protected).
+          if (_has_template) {
+            if (!_tpl_grey16) {
+              const uint8_t *m = tpl_mask + (size_t)row * prb;
+              for (int bx = 0; bx < prb; bx++)
+                dma_buffer[bx] &= (uint8_t)~m[bx];
+            } else {
+              const uint8_t *m = tpl_mask + (size_t)row * prb * 2;
+              for (int bx = 0; bx < prb; bx++) {
+                const uint8_t a = m[bx * 2], b = m[bx * 2 + 1];
+                uint8_t dm = 0;
+                if (a & 0xF0) dm |= 0xC0;
+                if (a & 0x0F) dm |= 0x30;
+                if (b & 0xF0) dm |= 0x0C;
+                if (b & 0x0F) dm |= 0x03;
+                dma_buffer[bx] &= (uint8_t)~dm;
+              }
             }
           }
         }

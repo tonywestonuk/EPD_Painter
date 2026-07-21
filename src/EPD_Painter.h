@@ -273,6 +273,23 @@ struct PowerCtlConfig {
     _dir_loaded |= (uint16_t)(1u << key);
   }
 
+  // Static template layer (Tony's banded-quality pattern, July 2026).
+  // setTemplate() paints fb (8bpp canvas, same format as paint()) at the
+  // given quality — independent of the current quality — then PROTECTS
+  // its non-white pixels: no subsequent paint can touch them, so
+  // animation runs in the template's white areas at any speed while the
+  // template keeps its high-quality rendering. (Unchanged pixels are
+  // never re-driven anyway; protection turns that from app discipline
+  // into a guarantee.) releaseTemplate() unpaints the template with the
+  // SAME quality that painted it — a NORMAL pixel erased by a FAST
+  // train would strand charge — and lifts the protection. clear()
+  // auto-releases first; setGreyLevels() is refused while a template is
+  // active. ~260 KB PSRAM (double in 16-grey). Returns false on
+  // allocation failure or FAST+16-grey.
+  bool setTemplate(const uint8_t *fb, Quality quality);
+  void releaseTemplate();
+  bool hasTemplate() const { return _has_template; }
+
   // Panel temperature in °C from the power PMIC's sensor (TPS65185 boards).
   // Returns EPD_PowerDriver::TEMP_UNAVAILABLE (-1000) if the board has no
   // sensor or begin() has not run yet.
@@ -396,6 +413,15 @@ private:
   void _decision_discover16_row(int row);
   uint8_t *_dec_plane_row(int sweep, int row);
   void _grey16_build_trains();
+
+  // ---- template layer ----
+  // Packed template + protection mask (11 / 1111 fields where a template
+  // pixel is non-white), stored for the mode active at setTemplate().
+  uint8_t *tpl_data = nullptr;
+  uint8_t *tpl_mask = nullptr;
+  bool     _has_template = false;
+  bool     _tpl_grey16   = false;
+  Quality  _tpl_quality  = Quality::QUALITY_NORMAL;
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};

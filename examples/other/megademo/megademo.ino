@@ -332,22 +332,19 @@ static void screenStars(uint32_t ms) {
     memset(fb, 3, (size_t)W * H); epd.paint(fb);
     memset(fb, 0, (size_t)W * H); epd.paint(fb);
   }
-  // Banded quality, the delta-engine way (Tony's idea): the caption band
-  // is painted ONCE at NORMAL — deep saturated black, crisp text — and
-  // the animation then runs FAST. Unchanged pixels are never re-driven,
-  // so the band keeps its NORMAL rendering under a FAST starfield:
-  // quality is a property of the paint that last touched a pixel, not
-  // of the frame.
-  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  // Banded quality, now a library feature (Tony's idea): the caption
+  // band goes on ONCE as a NORMAL-quality template — deep saturated
+  // black, crisp text — and stays protected while the starfield
+  // animates FAST in the template's white areas. releaseTemplate() at
+  // screen end unpaints it with the same NORMAL trains (charge-matched
+  // teardown), automatically.
   memset(fb, 0, (size_t)W * H);
   for (int y = 42; y < 180; y++)
     memset(fb + (size_t)y * W, 3, W);
   drawTextCentred("XTENSA SIMD ASSEMBLY", 58, 4, 0);
   drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 118, 2, 0);
   drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 148, 2, 0);
-  epd.paint(fb);
-  while (!epd.paintIdle()) delay(5);      // finish at NORMAL before switching
-  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
+  epd.setTemplate(fb, EPD_Painter::Quality::QUALITY_NORMAL);
   struct Star { int16_t x, y; uint16_t z; };
   static Star st[220];
   for (int i = 0; i < 220; i++)
@@ -361,31 +358,20 @@ static void screenStars(uint32_t ms) {
       if (st[i].z < 32) st[i].z = 1024;
       const int sx = W / 2 + st[i].x * 256 / st[i].z;
       const int sy = H / 2 + st[i].y * 256 / st[i].z;
-      for (int dy = 0; dy < 10; dy++)      // big black 10x10 stars
-        for (int dx = 0; dx < 10; dx++)
-          if (sx + dx >= 0 && sx + dx < W && sy + dy >= 0 && sy + dy < H)
-            fb[(size_t)(sy + dy) * W + sx + dx] = 3;
+      // Big black 10x10 stars. Keep them out of the band rows: the
+      // band's BLACK is protected, but the white text inside it is
+      // animation ground by definition — a star would fly through the
+      // letter holes.
+      for (int dy = 0; dy < 10; dy++)
+        for (int dx = 0; dx < 10; dx++) {
+          const int px = sx + dx, py = sy + dy;
+          if (px >= 0 && px < W && py >= 0 && py < H && (py < 42 || py >= 180))
+            fb[(size_t)py * W + px] = 3;
+        }
     }
-    // caption band: white text on black (static, so it never re-drives)
-    for (int y = 42; y < 180; y++)
-      memset(fb + (size_t)y * W, 3, W);
-    drawTextCentred("XTENSA SIMD ASSEMBLY", 58, 4, 0);
-    drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 118, 2, 0);
-    drawTextCentred("518KB CANVAS COMPACTED EVERY FRAME", 148, 2, 0);
     epd.paint(fb);
   }
-  // Undo in the quality you painted: the band went on at NORMAL (+13 a
-  // pixel over ~9 ms passes), so erasing it with the next screen's FAST
-  // clear (-7 over ~5 ms) would strand charge. Erase JUST the band at
-  // NORMAL — a cheap delta paint — and leave the stars for the FAST
-  // clear that matches them.
-  while (!epd.paintIdle()) delay(5);
-  for (int y = 42; y < 180; y++)
-    memset(fb + (size_t)y * W, 0, W);
-  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
-  epd.paint(fb);
-  while (!epd.paintIdle()) delay(5);
-  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
+  epd.releaseTemplate();   // charge-matched NORMAL unpaint, protection off
 }
 
 // ---------------------------------------------------------------------------
