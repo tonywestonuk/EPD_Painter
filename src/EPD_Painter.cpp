@@ -105,6 +105,8 @@ static IRAM_ATTR void compact_pixels_rotated_cw(
 //
 // size must be a multiple of 4.
 // =============================================================================
+static void compact_pixels16(const uint8_t *src, uint8_t *dst, uint32_t n);
+
 static IRAM_ATTR void compact_pixels_180(
     const uint8_t* src, uint8_t* dst, uint32_t size)
 {
@@ -265,8 +267,12 @@ bool EPD_Painter::setTemplate(const uint8_t *fb, Quality quality) {
   while (!paintIdle()) EPD_DELAY_MS(2);
   _config.quality = qsave;
 
-  // The screenbuffer now IS the template — copy it and derive the
-  // protection mask (non-white pixels).
+  // Capture the template by packing the CALLER'S fb — exactly as paint()
+  // packs it, rotation included — never by copying the screenbuffer. The
+  // screenbuffer is shared mutable state: another task's paintLater can
+  // land between the template paint and a screenbuffer copy, baking its
+  // dynamic content into the protected layer as un-erasable ghosts (seen
+  // in the field: magitrac's tracker glyphs stamped into its GUI chrome).
   const size_t bytes =
       (size_t)_config.width * _config.height / (_grey16 ? 2 : 4);
   tpl_data = (uint8_t *)heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM);
@@ -278,7 +284,18 @@ bool EPD_Painter::setTemplate(const uint8_t *fb, Quality quality) {
     tpl_data = tpl_mask = nullptr;
     return false;
   }
-  memcpy(tpl_data, _grey16 ? packed4_screenbuffer : packed_screenbuffer, bytes);
+  if (_grey16)
+    compact_pixels16((uint8_t *)fb, tpl_data,
+                     (uint32_t)_config.width * _config.height);
+  else if (_config.rotation == Rotation::ROTATION_CW)
+    compact_pixels_rotated_cw((uint8_t *)fb, tpl_data,
+                              _config.height, _config.width);
+  else if (_config.rotation == Rotation::ROTATION_180)
+    compact_pixels_180((uint8_t *)fb, tpl_data,
+                       _config.width * _config.height);
+  else
+    epd_painter_compact_pixels((uint8_t *)fb, tpl_data,
+                               _config.width * _config.height);
   for (size_t i = 0; i < bytes; i++) {
     const uint8_t b = tpl_data[i];
     uint8_t m = 0;
