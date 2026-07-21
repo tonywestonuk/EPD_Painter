@@ -35,6 +35,7 @@
 #include "tuned_trains_lilygo_t5s3.h"
 #include "tuned_trains_m5papers3.h"
 #include "direct_trains_m5papers3.h"
+#include "direct_trains_lilygo_t5s3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -470,11 +471,17 @@ void loop() {
       mode16 = false;
       if (!epd.setDirectTransitions(true)) { Serial.println("[direct] enable failed"); break; }
       directOn = true;
-      if (epd.getConfig().pin_syspwr >= 0) {
-        loadDirectTrainsM5PaperS3(epd);
-        Serial.println("[direct] 4-level direct mode, M5PaperS3 tuned trains loaded");
-      } else {
-        Serial.println("[direct] 4-level direct mode, NO trains for this board (all pairs two-step)");
+      {
+        // Trains are per-board and per-quality: pick both.
+        const bool m5 = epd.getConfig().pin_syspwr >= 0;
+        const bool fast =
+            epd.getConfig().quality == EPD_Painter::Quality::QUALITY_FAST;
+        if (m5 && fast)       loadDirectTrainsM5PaperS3Fast(epd);
+        else if (m5)          loadDirectTrainsM5PaperS3(epd);
+        else if (fast)        loadDirectTrainsLilygoFast(epd);
+        else                  loadDirectTrainsLilygo(epd);
+        Serial.printf("[direct] 4-level direct mode, %s %s trains loaded\n",
+                      m5 ? "M5PaperS3" : "LilyGo", fast ? "FAST" : "NORMAL");
       }
       break;
     case 'e':

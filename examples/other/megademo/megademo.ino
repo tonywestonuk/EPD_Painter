@@ -27,6 +27,7 @@
 #include "../grey16_testcard/tuned_trains_lilygo_t5s3.h"
 #include "../grey16_testcard/tuned_trains_m5papers3.h"
 #include "../grey16_testcard/direct_trains_m5papers3.h"
+#include "../grey16_testcard/direct_trains_lilygo_t5s3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -52,13 +53,13 @@ static void modeGrey16() {         // colours 0..15, ~4 fps, calibrated
   epd.setGreyLevels(16);
   loadBoardTrains();
 }
-static void modeNormal4Direct() {  // colours 0..3 + direct grey-to-grey
+static void modeFast4Direct() {    // colours 0..3, ~17 fps + direct grey-to-grey
   epd.setGreyLevels(4);
-  epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+  epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
   epd.setDirectTransitions(true);
-  // Direct trains are tuned for the M5PaperS3 so far; other boards keep
-  // the two-step fallback (which is simply the old behavior).
-  if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3(epd);
+  // Direct trains are per-board and per-quality (both boards tuned).
+  if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3Fast(epd);
+  else                                 loadDirectTrainsLilygoFast(epd);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,21 +106,26 @@ static const char SCROLL1[] =
 
 static void screenIntro(uint32_t ms) {
   Serial.printf("[demo] screenIntro t=%lu\n", millis());
-  modeNormal4Direct();
+  modeFast4Direct();
   epd.clear();
   const uint32_t t0 = millis();
   int sx = W;                       // scroller x
   for (uint32_t f = 0; millis() - t0 < ms; f++) {
-    memset(fb, 0, (size_t)W * H);
+    // Copper bars AND the drop-shadow are BACK — both were casualties of
+    // the artifact hunt. Black letters ploughing into their own grey
+    // shadow was a grey->grey two-step (erase to white this paint,
+    // redraw next), punching white holes through descending strokes —
+    // Tony spotted it. Now every grey-to-grey pixel rides a tuned FAST
+    // direct train in one paint, and the drifting bars are a full-width
+    // sheet of grey-to-grey transitions every frame: this screen IS the
+    // engine's stress gate.
+    for (int y = 0; y < H; y++) {
+      const uint8_t v = sinT[((y * 2) - f * 6) & 255];
+      const uint8_t band = (v > 208) ? 2 : (v > 176) ? 1 : 0;
+      memset(fb + (size_t)y * W, band, W);
+    }
     const int by = 120 + (abs((int)(f * 7 % 220) - 110) * 100) / 110 - 50;
-    // The drop-shadow is BACK — this screen is the direct engine's gate.
-    // It used to punch white holes through descending strokes: black
-    // letters ploughing into their own grey shadow was a grey->grey
-    // two-step (erase to white this paint, redraw next). Tony spotted
-    // it. Now every grey-to-grey pixel rides a tuned direct train in
-    // one paint; a clean descent is the proof.
-    drawText("EPD_PAINTER", (W - textWidth("EPD_PAINTER", 10)) / 2 + 8,
-             by + 8, 10, 1);
+    drawTextCentred("EPD_PAINTER", by + 6, 10, 2);
     drawTextCentred("EPD_PAINTER", by, 10, 3);
     drawTextCentred("M E G A D E M O", by + 100, 4, 3);
     // sine scroller along the bottom

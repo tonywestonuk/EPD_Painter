@@ -59,3 +59,41 @@ static void loadDirectTrainsM5PaperS3(EPD &epd) {
       if (f != t) epd.setDirectTrain((uint8_t)f, (uint8_t)t,
                                      DIRECT_M5PAPERS3_NORMAL[f][t], 26);
 }
+
+// QUALITY_FAST set (tuned 21 July 2026, same card method, all six pairs
+// within ±3.0). FAST potentials from the preset tables: Q(1) = +4,
+// Q(2) = +5, Q(3) = +7, so the nets are small — but FAST darken passes
+// are weak (no inter-pass delay), so the darkening directs need leading
+// whitens plus a LONG charge-neutral darken run to actually move the
+// glass. Five of six trains run past FAST's 7 passes (extension passes
+// are nearly free undelayed). The lightening directs needed almost
+// nothing: whitens bite hard even short.
+static const uint8_t DIRECT_M5PAPERS3_FAST[4][4][26] = {
+  { {0}, {0}, {0}, {0} },
+  { /* from 1 */
+    {0},
+    {0},
+    /* 1->2 net +1 (9)  */ {2,2,2,2,1,1,1,1,1},
+    /* 1->3 net +3 (9)  */ {2,2,2,1,1,1,1,1,1},
+  },
+  { /* from 2 */
+    {0},
+    /* 2->1 net -1 (1)  */ {2},
+    {0},
+    /* 2->3 net +2 (10) */ {2,2,2,2,1,1,1,1,1,1},
+  },
+  { /* from 3 */
+    {0},
+    /* 3->1 net -3 (5)  */ {2,2,2,2,1},
+    /* 3->2 net -2 (8)  */ {2,2,2,2,2,1,1,1},
+    {0},
+  },
+};
+
+template <typename EPD>
+static void loadDirectTrainsM5PaperS3Fast(EPD &epd) {
+  for (int f = 1; f <= 3; f++)
+    for (int t = 1; t <= 3; t++)
+      if (f != t) epd.setDirectTrain((uint8_t)f, (uint8_t)t,
+                                     DIRECT_M5PAPERS3_FAST[f][t], 26);
+}
