@@ -363,11 +363,11 @@ uint8_t *EPD_Painter::_dec_plane_row_dir(int sweep, int row) {
 void EPD_Painter::_decision_discover_direct_row(int row) {
   const uint8_t *pb = packed_paintbuffer  + (size_t)row * packed_row_bytes;
   uint8_t       *sb = packed_screenbuffer + (size_t)row * packed_row_bytes;
-  LineSweep *ls = &dec_sweeps[row * DEC_MAX_SWEEPS];
+  LineSweep *ls = &dec_sweeps_dir[row * DEC_MAX_SWEEPS_DIR];
 
   int8_t map[DEC_IDS];                               // id -> (sweep<<2)|slot
   memset(map, -1, sizeof(map));
-  uint8_t *plane[DEC_MAX_SWEEPS];
+  uint8_t *plane[DEC_MAX_SWEEPS_DIR];
   int ndec = 0, nsweeps = 0;
   uint32_t todo = 0;
 

@@ -226,9 +226,16 @@ bool EPD_Painter::setDirectTransitions(bool on) {
   if (!dec_spill_dir) {
     const size_t plane_bytes = (size_t)_config.width * _config.height / 4;
     dec_spill_dir = (uint8_t *)heap_caps_aligned_alloc(
-        16, plane_bytes * (DEC_MAX_SWEEPS - 2), MALLOC_CAP_SPIRAM);
-    if (!dec_spill_dir) {
-      printf("[EPD_Painter] direct-transition spill allocation failed\n");
+        16, plane_bytes * (DEC_MAX_SWEEPS_DIR - 2), MALLOC_CAP_SPIRAM);
+    dec_sweeps_dir = (LineSweep *)heap_caps_aligned_alloc(
+        4, sizeof(LineSweep) * _config.height * DEC_MAX_SWEEPS_DIR,
+        MALLOC_CAP_INTERNAL);
+    if (!(dec_spill_dir && dec_sweeps_dir)) {
+      printf("[EPD_Painter] direct-transition allocation failed\n");
+      if (dec_spill_dir)  heap_caps_free(dec_spill_dir);
+      if (dec_sweeps_dir) heap_caps_free(dec_sweeps_dir);
+      dec_spill_dir = nullptr;
+      dec_sweeps_dir = nullptr;
       return false;
     }
   }
@@ -932,6 +939,8 @@ void EPD_Painter::_paint_task_body() {
       // buffers, grey-to-grey pixels driven in one paint where a pair
       // train is loaded (see DECISION_ENGINE.md).
       any_work = _decision_discover_direct();
+      sweep_list = dec_sweeps_dir;
+      sweep_stride = DEC_MAX_SWEEPS_DIR;
     } else if (_decision_engine) {
       // Decision engine: C discovery — planes, masks, per-line todo words.
       any_work = _decision_discover();

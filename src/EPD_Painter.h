@@ -360,8 +360,10 @@ private:
   // 4-level compatibility — decisions 2..7, at most 2 sweeps per line.
   // The direct-transition engine adds ids 16..30 (16 | (from << 2) | to)
   // and can put 12 distinct decisions on a line (3 applies + 3 removes +
-  // 6 directs) = 4 sweeps; compat still writes at most 2.
-  static constexpr int DEC_MAX_SWEEPS   = 4;   // 4-level sweep lists
+  // 6 directs) = 4 sweeps — in its OWN lazily-allocated list, so apps
+  // that never enable it pay no internal RAM beyond the compat pair.
+  static constexpr int DEC_MAX_SWEEPS     = 2; // 4-level compat sweep lists
+  static constexpr int DEC_MAX_SWEEPS_DIR = 4; // direct-transition lists
   static constexpr int DEC_MAX_SWEEPS16 = 10;  // 16-grey: ceil(30 decisions / 3)
   static constexpr int DEC_IDS          = 32;  // 16 levels x 2 directions
   static constexpr int DEC_WF_LEN16     = 13;  // train length (NORMAL/HIGH)
@@ -398,6 +400,7 @@ private:
   uint16_t  _dir_loaded = 0;
   bool      _decision_direct = false;
   uint8_t  *dec_spill_dir = nullptr;   // slot planes for sweeps 2..3 (PSRAM)
+  LineSweep *dec_sweeps_dir = nullptr; // [height * DEC_MAX_SWEEPS_DIR], lazy
   uint32_t _decision_discover_direct();
   void _decision_discover_direct_row(int row);
   uint8_t *_dec_plane_row_dir(int sweep, int row);
