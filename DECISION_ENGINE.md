@@ -189,6 +189,20 @@ per-call, so per-line tables cost nothing).
   matched net. Gate: the 20-cycle ghost test dropped from a −4.0 seam
   (formula) to −1.1 (matched), at the measurement noise floor; white
   state lands −0.6. Tuned set in the same header as the applies.
+
+  **M5PaperS3 table, 21 July 2026.** The full loop (pure-darken probe →
+  match-card applies → remove ladder → ghost gate) ran on the M5PaperS3,
+  seeded from the LilyGo set: 10 of 15 apply levels passed unchanged on
+  the first scan — the two panels share a physics family — and the rest
+  converged in five iterations (all 15 within ±2.6; strictly monotonic
+  staircase). Divergences the glass insisted on: L1 is a single darken
+  (stronger first-pass response), L12 five pure darkens, L14 nine.
+  Charge-matched removes converged in three ladder iterations; ghost
+  gate at the noise floor (white +0.3, probe seam +0.9 after 20 cycles).
+  The testcard now carries both boards' tables and picks at runtime
+  (the M5PaperS3 preset is the one with a power-latch pin). Boot-image
+  DC cycle fixed for 16-grey: EPD_BootCtl forces setGreyLevels(4) both
+  sides of the sleep, since paintPacked/unpaintPacked are 2bpp-only.
 - **Phase D — calibration**: scanner rig + dithertune extended to tune 32
   trains per board (HIGH first). Gate: optical match of all 16 levels
   against dither references.

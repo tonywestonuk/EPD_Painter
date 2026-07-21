@@ -31,12 +31,20 @@
 #include "EPD_Painter.h"
 #include "EPD_Painter_presets.h"
 #include "tuned_trains_lilygo_t5s3.h"
+#include "tuned_trains_m5papers3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
 static uint8_t *fb;
 static int W, H;
 static bool mode16 = true;   // '4'/'6' switch between 4-level and 16-grey
+
+// Pick the scanner-tuned set for the board the AUTO probe found: the
+// M5PaperS3 preset is the one with a power-latch pin (pin_syspwr).
+static void loadBoardTrains() {
+  if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
+  else                                 loadTunedTrains(epd);
+}
 
 // Paint twice: erased grey-to-grey pixels are redrawn on the second call
 // (the engine's two-step transition — see DECISION_ENGINE.md).
@@ -109,6 +117,15 @@ static void drawWedge() {
 
 void setup() {
   Serial.begin(115200);
+  delay(300);
+  // Rig diagnostics: why did we boot? (1 power-on, 3 SW, 4 panic,
+  // 5/6/7/9 watchdogs, 15 brownout)
+  Serial.printf("[grey16] boot, reset reason %d\n", (int)esp_reset_reason());
+
+  // Calibration rig: never shutdown-on-reset — the flasher's hard reset
+  // would power the board off after every upload (on the M5PaperS3 the
+  // USB check can't see USB: it reads the LilyGo's BQ25896).
+  epd.setAutoShutdown(false);
 
   if (!epd.begin()) {
     Serial.println("EPD init failed");
@@ -119,9 +136,8 @@ void setup() {
     Serial.println("setGreyLevels(16) failed");
     while (1) delay(1000);
   }
-  // Scanner-tuned apply trains (LilyGo T5 S3 GPS, NORMAL). On other boards
-  // these are approximate until the match-card loop is run for that panel.
-  loadTunedTrains(epd);
+  // Scanner-tuned trains for this board (LilyGo T5 S3 GPS or M5PaperS3).
+  loadBoardTrains();
 
   W = epd.getConfig().width;
   H = epd.getConfig().height;
@@ -330,7 +346,7 @@ void loop() {
     case '6':
       if (epd.setGreyLevels(16)) {
         mode16 = true;
-        loadTunedTrains(epd);
+        loadBoardTrains();
         Serial.println("[grey16] 16-grey mode");
       } else Serial.println("[grey16] setGreyLevels(16) failed");
       break;
@@ -357,7 +373,7 @@ void loop() {
       Serial.println("[grey16] FORMULA removes loaded (unbalanced control)");
       break;
     case 'M':
-      loadTunedTrains(epd);
+      loadBoardTrains();
       Serial.println("[grey16] charge-matched trains loaded");
       break;
     case 't': {

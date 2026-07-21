@@ -30,6 +30,8 @@ void EPD_BootCtl::_init() {
     _writeFlag(false);
     uint8_t* packed = _getImage();
     if (packed) {
+        _epd.setGreyLevels(4);   // unpaintPacked is 2bpp-only (no-op at boot,
+                                 // defensive for manually-constructed bootctl)
         _epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
         _epd.unpaintPacked(packed);
         _epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
@@ -49,6 +51,11 @@ void EPD_BootCtl::_paintAndPowerOff() {
     _writeFlag(true);
 
     uint8_t* packed = _getImage();
+    // The boot-image DC cycle is a 2bpp operation (paintPacked /
+    // unpaintPacked refuse in 16-grey mode). If the app was running 16
+    // greys, drop back to 4 levels first — setGreyLevels migrates the
+    // screen state, so the clear below still erases what is on the glass.
+    _epd.setGreyLevels(4);
     _epd.setQuality(EPD_Painter::Quality::QUALITY_HIGH);
     _epd.clear();
     if (packed) {
