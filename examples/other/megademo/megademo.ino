@@ -95,6 +95,7 @@ static const char SCROLL1[] =
   "NO GHOSTS   ...   KEEP WATCHING FOR 16 REAL GREYS   ...      ";
 
 static void screenIntro(uint32_t ms) {
+  Serial.printf("[demo] screenIntro t=%lu\n", millis());
   modeFast4();
   epd.clear();
   const uint32_t t0 = millis();
@@ -145,6 +146,7 @@ static void ballInit() {
 }
 
 static void screenBoing(uint32_t ms) {
+  Serial.printf("[demo] screenBoing t=%lu\n", millis());
   modeFast4();
   epd.clear();
   if (!ballLat) ballInit();
@@ -192,32 +194,53 @@ static void screenBoing(uint32_t ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Screen 3 — GREYS. Live switch to the decision engine: 16-grey plasma.
+// Screen 3 — GREYS. Live switch to the decision engine: 16 bouncing balls,
+// one per native grey level, each with a black ring so white plays too.
 // ---------------------------------------------------------------------------
 static void screenGreys(uint32_t ms) {
+  Serial.printf("[demo] screenGreys t=%lu\n", millis());
   modeGrey16();
   epd.clear();
+  const int R = 52;
+  static int16_t hw[2 * 52 + 1], hwi[2 * 52 + 1];   // circle half-widths
+  for (int dy = -R; dy <= R; dy++) {
+    hw[dy + R] = (int16_t)sqrtf((float)(R * R - dy * dy));
+    const int ri = R - 4;                            // ring thickness 4
+    hwi[dy + R] = (abs(dy) <= ri)
+                    ? (int16_t)sqrtf((float)(ri * ri - dy * dy)) : -1;
+  }
+  struct Ball { int x, y, vx, vy; };
+  Ball b[16];
+  for (int i = 0; i < 16; i++) {
+    b[i].x = R + ((i % 4) * (W - 2 * R)) / 3;
+    b[i].y = R + ((i / 4) * (H - 2 * R)) / 3;
+    b[i].vx = ((i % 5) + 10) * ((i & 1) ? -1 : 1);
+    b[i].vy = (((i * 3) % 5) + 10) * ((i & 2) ? -1 : 1);
+  }
   const uint32_t t0 = millis();
-  for (uint32_t f = 0; millis() - t0 < ms; f++) {
-    const int t = f * 9;
-    for (int y = 0; y < H; y++) {
-      uint8_t *row = fb + (size_t)y * W;
-      const uint8_t sy = sinT[((y * 3) / 2 - t) & 255];
-      for (int x = 0; x < W; x++) {
-        const int v = sinT[(x + t) & 255] + sy +
-                      sinT[((x + y) + t * 2) & 255] / 2;
-        row[x] = (uint8_t)((v * 15) / 638);
+  while (millis() - t0 < ms) {
+    memset(fb, 0, (size_t)W * H);
+    for (int i = 0; i < 16; i++) {
+      b[i].x += b[i].vx; b[i].y += b[i].vy;
+      if (b[i].x < R)     { b[i].x = R;     b[i].vx = -b[i].vx; }
+      if (b[i].x > W - R) { b[i].x = W - R; b[i].vx = -b[i].vx; }
+      if (b[i].y < R)     { b[i].y = R;     b[i].vy = -b[i].vy; }
+      if (b[i].y > H - R) { b[i].y = H - R; b[i].vy = -b[i].vy; }
+      for (int dy = -R; dy <= R; dy++) {
+        uint8_t *row = fb + (size_t)(b[i].y + dy) * W + b[i].x;
+        const int w = hw[dy + R], wi = hwi[dy + R];
+        if (wi < 0) {                                 // ring-only rows
+          for (int dx = -w; dx <= w; dx++) row[dx] = 15;
+        } else {
+          for (int dx = -w;  dx < -wi; dx++) row[dx] = 15;
+          for (int dx = -wi; dx <= wi; dx++) row[dx] = (uint8_t)i;
+          for (int dx = wi + 1; dx <= w; dx++) row[dx] = 15;
+        }
       }
     }
-    // swatch strip: the 16 levels, labelled
-    for (int b = 0; b < 16; b++) {
-      const int x0 = (b * W) / 16, x1 = ((b + 1) * W) / 16;
-      for (int y = H - 70; y < H - 20; y++)
-        memset(fb + (size_t)y * W + x0, b, x1 - x0);
-    }
-    drawTextCentred("16 NATIVE GREYS", 30, 6, 15);
-    drawTextCentred("SCANNER-CALIBRATED WAVEFORMS", 90, 3, 15);
-    drawTextCentred("THIS MODE SWITCH HAPPENED LIVE", 130, 2, 0);
+    drawTextCentred("16 NATIVE GREYS", 20, 6, 15);
+    drawTextCentred("SCANNER-CALIBRATED WAVEFORMS", 80, 3, 15);
+    drawTextCentred("THIS MODE SWITCH HAPPENED LIVE", H - 40, 2, 15);
     epd.paint(fb);
   }
 }
@@ -226,6 +249,7 @@ static void screenGreys(uint32_t ms) {
 // Screen 4 — STARS. Starfield + the engine-room name-dropping.
 // ---------------------------------------------------------------------------
 static void screenStars(uint32_t ms) {
+  Serial.printf("[demo] screenStars t=%lu\n", millis());
   modeFast4();
   epd.clear();
   struct Star { int16_t x, y; uint16_t z; };
@@ -241,11 +265,10 @@ static void screenStars(uint32_t ms) {
       if (st[i].z < 32) st[i].z = 1024;
       const int sx = W / 2 + st[i].x * 256 / st[i].z;
       const int sy = H / 2 + st[i].y * 256 / st[i].z;
-      const int s = st[i].z < 200 ? 3 : st[i].z < 500 ? 2 : 1;
-      for (int dy = 0; dy < s; dy++)
-        for (int dx = 0; dx < s; dx++)
+      for (int dy = 0; dy < 10; dy++)      // big white 10x10 stars
+        for (int dx = 0; dx < 10; dx++)
           if (sx + dx >= 0 && sx + dx < W && sy + dy >= 0 && sy + dy < H)
-            fb[(size_t)(sy + dy) * W + sx + dx] = st[i].z < 400 ? 0 : 1;
+            fb[(size_t)(sy + dy) * W + sx + dx] = 0;
     }
     drawTextCentred("XTENSA SIMD ASSEMBLY", 60, 4, 0);
     drawTextCentred("LCD_CAM DMA + DOUBLE-BUFFERED ROWS", 120, 2, 1);
@@ -264,6 +287,7 @@ static const char SCROLL2[] =
   "ONE LIBRARY, FOUR SPEEDS, SIXTEEN GREYS   ...   GET IT ON GITHUB      ";
 
 static void screenMega(uint32_t ms) {
+  Serial.printf("[demo] screenMega t=%lu\n", millis());
   modeFast4();
   epd.clear();
   const uint32_t t0 = millis();
@@ -294,6 +318,7 @@ static void screenMega(uint32_t ms) {
 // Screen 6 — CREDITS. 16-grey radial glow, greetz, DC-balance flex.
 // ---------------------------------------------------------------------------
 static void screenCredits(uint32_t ms) {
+  Serial.printf("[demo] screenCredits t=%lu\n", millis());
   modeGrey16();
   epd.clear();
   for (int y = 0; y < H; y++) {
@@ -305,6 +330,12 @@ static void screenCredits(uint32_t ms) {
       row[x] = (uint8_t)(v > 15 ? 15 : v);
     }
   }
+  // white halo so the black title reads on the dark gradient
+  for (int oy = -4; oy <= 4; oy += 4)
+    for (int ox = -4; ox <= 4; ox += 4)
+      if (ox || oy)
+        drawText("EPD_PAINTER", (W - textWidth("EPD_PAINTER", 8)) / 2 + ox,
+                 90 + oy, 8, 0);
   drawTextCentred("EPD_PAINTER", 90, 8, 15);
   drawTextCentred("CODE + WAVEFORM PHYSICS: TONY WESTON", 200, 2, 15);
   drawTextCentred("CALIBRATION RIG: A FLATBED SCANNER", 230, 2, 15);
