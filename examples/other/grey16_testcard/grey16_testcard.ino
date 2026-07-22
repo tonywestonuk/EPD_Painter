@@ -34,6 +34,7 @@
 #include "EPD_Painter_presets.h"
 #include "tuned_trains_lilygo_t5s3.h"
 #include "tuned_trains_m5papers3.h"
+#include "tuned_trains_h716.h"
 #include "direct_trains_m5papers3.h"
 #include "direct_trains_lilygo_t5s3.h"
 
@@ -46,8 +47,10 @@ static bool mode16 = true;   // '4'/'6' switch between 4-level and 16-grey
 // Pick the scanner-tuned set for the board the AUTO probe found: the
 // M5PaperS3 preset is the one with a power-latch pin (pin_syspwr).
 static void loadBoardTrains() {
-  if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
-  else                                 loadTunedTrains(epd);
+  if (epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
+      epd.getConfig().shift.data >= 0)   loadTunedTrainsH716(epd);
+  else if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
+  else                                      loadTunedTrains(epd);
 }
 
 // Paint twice: erased grey-to-grey pixels are redrawn on the second call
@@ -377,6 +380,7 @@ static void transitionCard() {
 void loop() {
   if (!Serial.available()) { delay(20); return; }
   switch (Serial.read()) {
+    case 'z': epd.debugPinBench(); break;
     case 'b': drawStaircase(false); show(); Serial.println("[grey16] staircase");         break;
     case 'w': drawWedge();          show(); Serial.println("[grey16] wedge");             break;
     case 'i': drawStaircase(true);  show(); Serial.println("[grey16] inverse staircase"); break;

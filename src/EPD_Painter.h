@@ -333,6 +333,11 @@ struct PowerCtlConfig {
   // sbhits / tplhits are RETAINED tripwire counters — nonzero means the
   // event happened at some point since boot, even if serial was not
   // attached at the moment it fired.
+  // Micro-benchmark the control-pin paths (LE = possibly shift-register,
+  // CKV = direct GPIO): 1000 pulses each, prints us/pulse. Call after
+  // begin(), panel power state irrelevant.
+  void debugPinBench();
+
   void debugState() const {
     printf("[EPD] tpl=%d dir=%d ceng=%d g16=%d tplp=%p/%p | sbhits=%lu "
            "tplhits=%lu | int free=%u largest=%u | psram free=%u\n",

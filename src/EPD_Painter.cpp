@@ -345,12 +345,25 @@ void EPD_Painter::releaseTemplate() {
 // =============================================================================
 // sendRow()
 // =============================================================================
+#ifdef EPD_ROW_PHASE_TIMING
+// Per-paint accumulators: where does a row's time go? Reset at each
+// drive's pass loop, printed after it.
+int64_t g_rp_wait_us = 0, g_rp_pins_us = 0;
+uint32_t g_rp_rows = 0;
+#endif
+
 void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool noAdvance) {
+#ifdef EPD_ROW_PHASE_TIMING
+  const int64_t _rp_t0 = esp_timer_get_time();
+#endif
   // Wait for LCD peripheral to finish consuming the previous row.
   // This also guarantees the previously-started DMA transfer is complete,
   // since the LCD FIFO cannot drain faster than DMA fills it.
   //long count=0;
   while (LCD_CAM.lcd_user.lcd_start) {}
+#ifdef EPD_ROW_PHASE_TIMING
+  g_rp_wait_us += esp_timer_get_time() - _rp_t0;
+#endif
   //printf("yielded %d \n",count);
   //delayMicroseconds(4);
 
@@ -381,6 +394,9 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool noAdvance) {
   LCD_CAM.lcd_misc.lcd_afifo_reset = 1;
   gdma_start(dma_chan, (intptr_t)desc);
 
+#ifdef EPD_ROW_PHASE_TIMING
+  const int64_t _rp_t2 = esp_timer_get_time();
+#endif
   if (firstLine) {
     _pin_spv->set(false);
     _pin_ckv->set(false);
@@ -399,6 +415,10 @@ void EPD_Painter::sendRow(bool firstLine, bool lastLine, bool noAdvance) {
     EPD_DELAY_US(1);
     _pin_ckv->set(true);
   }
+#ifdef EPD_ROW_PHASE_TIMING
+  g_rp_pins_us += esp_timer_get_time() - _rp_t2;
+  g_rp_rows++;
+#endif
 
   LCD_CAM.lcd_user.lcd_start = 1;
   if (lastLine) {
@@ -682,6 +702,17 @@ void EPD_Painter::_pushRow() {
   LCD_CAM.lcd_user.lcd_start = 1;
   spin = 0;
   while (LCD_CAM.lcd_user.lcd_start && ++spin < 200000) {}
+}
+
+void EPD_Painter::debugPinBench() {
+  if (!_pin_le || !_pin_ckv) { printf("[bench] pins not initialised\n"); return; }
+  const int64_t t0 = esp_timer_get_time();
+  for (int i = 0; i < 1000; i++) { _pin_le->set(true); _pin_le->set(false); }
+  const int64_t t1 = esp_timer_get_time();
+  for (int i = 0; i < 1000; i++) { _pin_ckv->set(true); _pin_ckv->set(false); }
+  const int64_t t2 = esp_timer_get_time();
+  printf("[bench] LE pulse %.3f us  |  CKV pulse %.3f us  (1000 each)\n",
+         (t1 - t0) / 1000.0, (t2 - t1) / 1000.0);
 }
 
 void EPD_Painter::powerOn() {
@@ -1194,6 +1225,10 @@ void EPD_Painter::_paint_task_body() {
 #ifdef EPD_GREY16_PASS_TIMING
     int64_t _g16_rowloop_min = 0, _g16_rowloop_max = 0;
 #endif
+#ifdef EPD_ROW_PHASE_TIMING
+    { extern int64_t g_rp_wait_us, g_rp_pins_us; extern uint32_t g_rp_rows;
+      g_rp_wait_us = g_rp_pins_us = 0; g_rp_rows = 0; }
+#endif
     for (uint8_t pass = 0; pass < wf_len; pass++) {
       const int64_t pass_t0 = esp_timer_get_time();
       // Per-decision broadcast bytes for this pass: code * 0x55 replicates
@@ -1272,6 +1307,14 @@ void EPD_Painter::_paint_task_body() {
 #ifdef EPD_ASM_TIMING
     printf("[paint_task] convert_packed_fb_to_ink (all passes, all rows, darker+lighter): %lld us\n", _conv_total);
     printf("[paint_task] merged (mixed-chunk) rows: %d of %d\n", _dbl_rows, _config.height);
+#endif
+#ifdef EPD_ROW_PHASE_TIMING
+    { extern int64_t g_rp_wait_us, g_rp_pins_us; extern uint32_t g_rp_rows;
+      if (g_rp_rows)
+        printf("[rowprof] rows=%u  dma-wait=%lld us (%.1f/row)  pins=%lld us (%.1f/row)\n",
+               (unsigned)g_rp_rows, (long long)g_rp_wait_us,
+               (double)g_rp_wait_us / g_rp_rows,
+               (long long)g_rp_pins_us, (double)g_rp_pins_us / g_rp_rows); }
 #endif
 
     vTaskDelay(1);  // yield once per frame: feeds WDT and lets application task run

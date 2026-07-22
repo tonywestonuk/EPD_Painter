@@ -47,12 +47,14 @@
         },
         .shift = { .data = 13, .clk = 12, .strobe = 0, .le_time = 0,
                    .driver = EPD_Painter::Shift::H716 },
-        // Shift-register rows are slow: worst-case row loop measured
-        // 16-23 ms (vs ~7 ms on direct-GPIO boards), so the 16-grey
-        // constant pass period must be longer here. Trains are calibrated
-        // at THESE periods.
-        .g16_pass_us_normal = 28000,
-        .g16_pass_us_high   = 32000,
+        // Row-loop cost here is conversion-bound like every board (the
+        // shift register adds only ~1us/row via the fast-GPIO path;
+        // measured: LE pulse 1.17us). Typical worst passes ~16 ms; the
+        // pathological full-screen-inversion case overruns and clamps to
+        // the settle floor, same as the M5PaperS3 at its 15 ms period.
+        // Trains are calibrated at THESE periods.
+        .g16_pass_us_normal = 20000,
+        .g16_pass_us_high   = 24000,
     };
 #endif
 
