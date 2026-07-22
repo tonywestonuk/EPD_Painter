@@ -26,6 +26,7 @@
 // Scanner-calibrated 16-grey trains live with the testcard example.
 #include "../grey16_testcard/tuned_trains_lilygo_t5s3.h"
 #include "../grey16_testcard/tuned_trains_m5papers3.h"
+#include "../grey16_testcard/tuned_trains_h716.h"
 #include "../grey16_testcard/direct_trains_m5papers3.h"
 #include "../grey16_testcard/direct_trains_lilygo_t5s3.h"
 
@@ -35,9 +36,15 @@ static uint8_t *fb;
 static int W, H;
 static uint8_t sinT[256];         // 0..255 sine table
 
+static bool isH716() {
+  return epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
+         epd.getConfig().shift.data >= 0;
+}
+
 static void loadBoardTrains() {
-  if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
-  else                                 loadTunedTrains(epd);
+  if (isH716())                             loadTunedTrainsH716(epd);
+  else if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
+  else                                      loadTunedTrains(epd);
 }
 
 // ---------------------------------------------------------------------------
@@ -56,8 +63,11 @@ static void modeGrey16() {         // colours 0..15, ~4 fps, calibrated
 static void modeFast4Direct() {    // colours 0..3, ~17 fps + direct grey-to-grey
   epd.setGreyLevels(4);
   epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
+  // Direct trains are per-board and per-quality. H716: none tuned yet —
+  // stay on legacy two-step transitions (per-pair fallback would kick in
+  // anyway, but this also skips the direct engine's sweep-list RAM).
+  if (isH716()) return;
   epd.setDirectTransitions(true);
-  // Direct trains are per-board and per-quality (both boards tuned).
   if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3Fast(epd);
   else                                 loadDirectTrainsLilygoFast(epd);
 }
