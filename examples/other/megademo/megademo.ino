@@ -29,6 +29,7 @@
 #include "../grey16_testcard/tuned_trains_h716.h"
 #include "../grey16_testcard/direct_trains_m5papers3.h"
 #include "../grey16_testcard/direct_trains_lilygo_t5s3.h"
+#include "../grey16_testcard/direct_trains_h716.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -63,12 +64,10 @@ static void modeGrey16() {         // colours 0..15, ~4 fps, calibrated
 static void modeFast4Direct() {    // colours 0..3, ~17 fps + direct grey-to-grey
   epd.setGreyLevels(4);
   epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
-  // Direct trains are per-board and per-quality. H716: none tuned yet —
-  // stay on legacy two-step transitions (per-pair fallback would kick in
-  // anyway, but this also skips the direct engine's sweep-list RAM).
-  if (isH716()) return;
   epd.setDirectTransitions(true);
-  if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3Fast(epd);
+  // Direct trains are per-board and per-quality (all three boards tuned).
+  if (isH716())                        loadDirectTrainsH716Fast(epd);
+  else if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3Fast(epd);
   else                                 loadDirectTrainsLilygoFast(epd);
 }
 

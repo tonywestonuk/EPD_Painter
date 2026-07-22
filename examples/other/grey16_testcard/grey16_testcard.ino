@@ -37,6 +37,7 @@
 #include "tuned_trains_h716.h"
 #include "direct_trains_m5papers3.h"
 #include "direct_trains_lilygo_t5s3.h"
+#include "direct_trains_h716.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -477,15 +478,20 @@ void loop() {
       directOn = true;
       {
         // Trains are per-board and per-quality: pick both.
+        const bool h716 = epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
+                          epd.getConfig().shift.data >= 0;
         const bool m5 = epd.getConfig().pin_syspwr >= 0;
         const bool fast =
             epd.getConfig().quality == EPD_Painter::Quality::QUALITY_FAST;
-        if (m5 && fast)       loadDirectTrainsM5PaperS3Fast(epd);
+        if (h716 && fast)     loadDirectTrainsH716Fast(epd);
+        else if (h716)        loadDirectTrainsH716(epd);
+        else if (m5 && fast)  loadDirectTrainsM5PaperS3Fast(epd);
         else if (m5)          loadDirectTrainsM5PaperS3(epd);
         else if (fast)        loadDirectTrainsLilygoFast(epd);
         else                  loadDirectTrainsLilygo(epd);
         Serial.printf("[direct] 4-level direct mode, %s %s trains loaded\n",
-                      m5 ? "M5PaperS3" : "LilyGo", fast ? "FAST" : "NORMAL");
+                      h716 ? "H716" : (m5 ? "M5PaperS3" : "LilyGo"),
+                      fast ? "FAST" : "NORMAL");
       }
       break;
     case 'e':
