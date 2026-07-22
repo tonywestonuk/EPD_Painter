@@ -26,17 +26,23 @@
         .i2c = { .sda = 18, .scl = 17, .freq = 100000 },
         .power = { .pca_addr = -1, .tps_addr = -1 },
         .waveforms = {
-            .fast_lighter   = { { 1, 3, 2, 3, 2, 2, 3 },
-                                { 3, 2, 3, 2, 2, 3, 2 },
+            // FAST pairs dither-match calibrated 22 Jul 2026 (dithertune
+            // --tier F: dark -0.4, light -2.6 in 2 iterations; FAST ghost
+            // residual 13.6 — tier-typical, apps hard-clear).
+            .fast_lighter   = { { 3, 3, 2, 3, 2, 2, 3 },
+                                { 2, 2, 3, 2, 2, 3, 2 },
                                 { 2, 2, 2, 2, 2, 2, 2 } },
-            .fast_darker    = { { 3, 1, 3, 2, 1, 1, 3 },
-                                { 1, 3, 1, 3, 1, 1, 3 },
+            .fast_darker    = { { 3, 1, 3, 3, 1, 1, 3 },
+                                { 1, 3, 1, 3, 1, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1 } },
+            // Dark-grey pair (row 1) dither-match calibrated 22 Jul 2026
+            // (dithertune h716_normal: dark -1.5, light +0.9, 2 iterations;
+            // ghost residual 7.5 vs the 5-6 floor of the other boards).
             .normal_lighter = { { 1, 1, 1, 1, 2, 3, 3, 2, 2, 2, 2, 2, 2 },
-                                { 2, 1, 2, 2, 1, 2, 2, 2, 0, 0, 2, 2, 3 },
+                                { 3, 3, 2, 2, 1, 2, 2, 2, 0, 0, 2, 2, 3 },
                                 { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
             .normal_darker  = { { 1, 2, 1, 3, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
-                                { 1, 1, 1, 2, 2, 3, 1, 1, 3, 2, 1, 1, 3 },
+                                { 1, 1, 1, 2, 3, 3, 1, 1, 3, 3, 1, 1, 3 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
             .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
                                 { 1, 1, 2, 2, 1, 2, 2, 2, 2, 1, 2, 2, 2 },

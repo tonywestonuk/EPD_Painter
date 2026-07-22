@@ -9,6 +9,7 @@ reference is in-frame, so scanner tone response cancels out.
 
 Usage:
   python3 dithertune.py [--condition 8] [--max-iters 10] [--tol 3] [--tag x]
+                        [--tier N|F]   (which quality tier's tables to tune)
 """
 
 import argparse, os, sys
@@ -66,11 +67,13 @@ def main():
     ap.add_argument("--tol", type=float, default=3.0)
     ap.add_argument("--tag", default="dtune")
     ap.add_argument("--port")
+    ap.add_argument("--tier", choices=("N", "F"), default="N")
     a = ap.parse_args()
 
     s = rig.open_serial(a.port)
+    rig.command(s, f"Q {a.tier}")
     tables = read_tables(s)
-    nd, nl = tables["ND"], tables["NL"]
+    nd, nl = tables[a.tier + "D"], tables[a.tier + "L"]
     for row in (0, 1):
         b = balance(nd[row], nl[row])
         if b:
@@ -107,9 +110,9 @@ def main():
                 continue
             assert balance(cur_nd, cur_nl) == 0
             nd[row], nl[row] = cur_nd, cur_nl
-            rig.command(s, f"W ND {row} " + " ".join(map(str, cur_nd)))
-            rig.command(s, f"W NL {row} " + " ".join(map(str, cur_nl)))
-            print(f"   ND{row} -> {cur_nd}\n   NL{row} -> {cur_nl}", flush=True)
+            rig.command(s, f"W {a.tier}D {row} " + " ".join(map(str, cur_nd)))
+            rig.command(s, f"W {a.tier}L {row} " + " ".join(map(str, cur_nl)))
+            print(f"   {a.tier}D{row} -> {cur_nd}\n   {a.tier}L{row} -> {cur_nl}", flush=True)
             edits = True
         prev = deltas
         if not edits:
