@@ -723,10 +723,6 @@ void EPD_Painter::powerOn() {
 
   _powerDriver->powerOn();
 
-  // TPS is awake now, so the temperature read is cheap — re-pick the
-  // waveform band for the drive that's about to happen.
-  selectWaveformsForTemperature();
-
   // Flush the source shift chain. After a rail cycle the chain can hold
   // stale drive data at a variable offset — the first frame's rows then
   // land shifted a few pixels left/right (seen as thin ghost lines on a
@@ -764,29 +760,6 @@ void EPD_Painter::powerOff() {
   _powerDriver->powerOff();
 }
 
-
-// Pick the waveform table for the current panel temperature. Called at every
-// panel power-on so a device cooling or warming in the field re-selects
-// without any application involvement.
-void EPD_Painter::selectWaveformsForTemperature() {
-  const Waveforms* wf = &_config.waveforms;
-  if (_config.num_waveform_bands > 0) {
-    int t = _powerDriver->readTemperatureC();
-    if (t != EPD_PowerDriver::TEMP_UNAVAILABLE) {
-      for (int i = 0; i < _config.num_waveform_bands; i++) {
-        if (t < _config.waveform_bands[i].below_c) {
-          wf = &_config.waveform_bands[i].waveforms;
-          break;
-        }
-      }
-    }
-  }
-  if (wf != _active_wf) {
-    printf("[EPD] waveform band switch (%s)\n",
-           wf == &_config.waveforms ? "default" : "cold");
-    _active_wf = wf;
-  }
-}
 
 int EPD_Painter::readPanelTemperatureC() {
   if (!_powerDriver) return EPD_PowerDriver::TEMP_UNAVAILABLE;
@@ -1095,10 +1068,7 @@ void EPD_Painter::_paint_task_body() {
     const uint8_t *dk_wf;
     int wf_len;
 
-    // powerOn() (via the PanelPowerGuard above) selected the band for the
-    // current panel temperature; fall back to the default table if a paint
-    // somehow precedes the first power-on.
-    const Waveforms &wf = _active_wf ? *_active_wf : _config.waveforms;
+    const Waveforms &wf = _config.waveforms;
 
     if (_config.quality == Quality::QUALITY_FAST) {
       lt_wf = &wf.fast_lighter[0][0];
