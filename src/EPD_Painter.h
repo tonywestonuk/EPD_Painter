@@ -345,13 +345,14 @@ struct PowerCtlConfig {
 
   // Idle panel power-off: rails power down after `seconds` without a
   // paint (next paint powers them back up); 0 keeps rails up forever.
-  // Each rail cycle physically disturbs the glass a little in a
-  // content-shaped way the screenbuffer never learns about (proven on
-  // magitrac: sbhits=0 while ghosts accumulated, one power cycle per
-  // ~15 s of status-flap repaints). The old 5 s default turned busy-ish
-  // apps into power-cycle factories; 60 s keeps active sessions powered
-  // while a truly idle device still sleeps.
-  void setIdlePowerOff(bool on) { _idle_timeout_s = on ? 60 : 0; }
+  // Default 5 s — the battery-friendly setting e-paper deserves.
+  // (During the 2026 ghost hunt each rail cycle shifted content on the
+  // glass and this default was raised to 60 s as a mitigation; the root
+  // cause was the source driver's start logic never being re-armed —
+  // fixed in powerOn()'s SPH sweep — so cycles are safe again. Raise
+  // the timeout only if the ~100 ms power-up latency on the first paint
+  // after an idle gap bothers your app.)
+  void setIdlePowerOff(bool on) { _idle_timeout_s = on ? 5 : 0; }
   void setIdleTimeout(int seconds) { _idle_timeout_s = seconds; }
 
   void setAutoShutdown(bool v) { _autoShutdown = v; }
@@ -476,7 +477,7 @@ private:
   void     _sb_guard_update();
   void     _sb_guard_check();
 
-  int _idle_timeout_s = 60;
+  int _idle_timeout_s = 5;
 
   int packed_row_bytes = 0;
   std::atomic<int> paintStage{0};
