@@ -159,6 +159,16 @@
                                 { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
+        // MEASURED 24 Jul 2026: this panel's re-darkens are weaker than
+        // the M5PaperS3's — at the default 15 ms period its 16-grey
+        // black floors at ~67 while the glass reaches ~51 at 20 ms (the
+        // H716's cure). The tuned tables below are 15 ms tables, so the
+        // period stays 15 ms until a 20 ms retune session lands: raising
+        // it without retuning scrambles the ladder (verified). The 20 ms
+        // retune must use the match-card method — staircase-vs-anchor
+        // tuning cannot converge here (frame-composition shifts move
+        // landings by 3-6 levels between frames; also a ~5-unit
+        // top-to-bottom panel gradient, calibrate via the L15 pair).
     };
 #endif
 // -----------------------------------------------------------------------
