@@ -11,8 +11,8 @@
 //   5 MEGA     giant wave text scroller: the feature list   (FAST again)
 //   6 CREDITS  16-grey radial glow + greetz                 (DC balanced)
 //
-// Works on the M5PaperS3 and LilyGo T5 S3 GPS (auto-probe); loads each
-// board's scanner-calibrated 16-grey trains for screens 3 and 6.
+// Works on the M5PaperS3 and LilyGo T5 S3 GPS (auto-probe); the board
+// preset auto-loads its scanner-calibrated trains (16-grey and direct).
 // ============================================================================
 
 // Choose your board (or leave all commented for auto-probe).
@@ -23,13 +23,6 @@
 #include "EPD_Painter.h"
 #include "EPD_Painter_presets.h"
 #include "font8x8_basic.h"
-// Scanner-calibrated 16-grey trains live with the testcard example.
-#include "../grey16_testcard/tuned_trains_lilygo_t5s3.h"
-#include "../grey16_testcard/tuned_trains_m5papers3.h"
-#include "../grey16_testcard/tuned_trains_h716.h"
-#include "../grey16_testcard/direct_trains_m5papers3.h"
-#include "../grey16_testcard/direct_trains_lilygo_t5s3.h"
-#include "../grey16_testcard/direct_trains_h716.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -37,20 +30,10 @@ static uint8_t *fb;
 static int W, H;
 static uint8_t sinT[256];         // 0..255 sine table
 
-static bool isH716() {
-  return epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
-         epd.getConfig().shift.data >= 0;
-}
-
-static void loadBoardTrains() {
-  if (isH716())                             loadTunedTrainsH716(epd);
-  else if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
-  else                                      loadTunedTrains(epd);
-}
-
 // ---------------------------------------------------------------------------
 // Mode helpers. Switching bit depth mid-demo is itself the demo: the same
-// canvas drives 4-level FAST motion and 16-grey NORMAL stills.
+// canvas drives 4-level FAST motion and 16-grey NORMAL stills. The preset's
+// scanner-tuned trains (16-grey and per-quality direct) load automatically.
 // ---------------------------------------------------------------------------
 static void modeFast4() {          // colours 0..3, ~17 fps full motion
   epd.setGreyLevels(4);
@@ -59,16 +42,11 @@ static void modeFast4() {          // colours 0..3, ~17 fps full motion
 static void modeGrey16() {         // colours 0..15, ~4 fps, calibrated
   epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
   epd.setGreyLevels(16);
-  loadBoardTrains();
 }
 static void modeFast4Direct() {    // colours 0..3, ~17 fps + direct grey-to-grey
   epd.setGreyLevels(4);
   epd.setQuality(EPD_Painter::Quality::QUALITY_FAST);
   epd.setDirectTransitions(true);
-  // Direct trains are per-board and per-quality (all three boards tuned).
-  if (isH716())                        loadDirectTrainsH716Fast(epd);
-  else if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3Fast(epd);
-  else                                 loadDirectTrainsLilygoFast(epd);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +171,28 @@ static void screenBoing(uint32_t ms) {
   const uint32_t t0 = millis();
   uint32_t frames = 0;
   char fpsTxt[20] = "";
-  while (millis() - t0 < ms) {
+  bool paused = false;
+  while (paused || millis() - t0 < ms) {
+    // Scanner-rig frame control: 'p' pause/resume (the panel holds the
+    // last painted frame for the flatbed), 'n' paint exactly one more
+    // frame while paused, 'q' hand back to the demo loop. Physics is
+    // deterministic per frame count, so frame numbers are reproducible
+    // across runs of this screen.
+    bool step = false;
+    while (Serial.available()) {
+      const int c = Serial.read();
+      if (c == 'p') {
+        paused = !paused;
+        Serial.printf("[boing] %s at frame %lu\n",
+                      paused ? "PAUSED" : "running", (unsigned long)frames);
+      } else if (c == 'n') {
+        step = true;
+      } else if (c == 'q') {
+        Serial.println("[boing] quit");
+        return;
+      }
+    }
+    if (paused && !step) { delay(10); continue; }
     frames++;
     memset(fb, 0, (size_t)W * H);
     // floor: depth rulings pack toward the horizon...
@@ -268,7 +267,21 @@ static void screenBoing(uint32_t ms) {
                frames * 1000.0f / (millis() - t0 + 1));
     drawText(fpsTxt, 16, H - 30, 2, 10);
     epd.paint(fb);
+    if (paused) {
+      while (!epd.paintIdle()) delay(2);
+      Serial.printf("[boing] frame %lu held\n", (unsigned long)frames);
+    }
   }
+}
+
+// Scanner-rig hook: send 'B' at any time; at the next screen boundary the
+// demo parks on a 10-minute boing (pause/step over serial, above), then
+// resumes the loop.
+static void maybeBoing() {
+  bool b = false;
+  while (Serial.available())
+    if (Serial.read() == 'B') b = true;
+  if (b) screenBoing(600000);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +471,9 @@ static void screenCredits(uint32_t ms) {
 // ---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
+  // Scanner rig: never shutdown-on-reset — the flasher's hard reset would
+  // power the board off after every upload (button press needed to wake).
+  epd.setAutoShutdown(false);
   if (!epd.begin()) {
     Serial.println("EPD init failed");
     while (1) delay(1000);
@@ -475,10 +491,10 @@ void setup() {
 }
 
 void loop() {
-  screenIntro(22000);
-  screenBoing(22000);
-  screenGreys(24000);
-  screenStars(15000);
-  screenMega(24000);
-  screenCredits(13000);
+  maybeBoing(); screenIntro(22000);
+  maybeBoing(); screenBoing(22000);
+  maybeBoing(); screenGreys(24000);
+  maybeBoing(); screenStars(15000);
+  maybeBoing(); screenMega(24000);
+  maybeBoing(); screenCredits(13000);
 }
