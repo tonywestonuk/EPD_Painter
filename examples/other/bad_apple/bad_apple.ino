@@ -83,6 +83,10 @@ static bool sdPinsForBoard(SdPins &p) {
     p = { 47, 39, 38, 40, true, -1 };
     return true;
   }
+  if (cfg.i2c.sda == 18 && cfg.i2c.scl == 17) {        // LilyGo EPD47 H716 (S3)
+    p = { 42, 11, 15, 16, false, -1 };                 // per LilyGo-EPD47 utilities.h
+    return true;
+  }
   return false;
 }
 
