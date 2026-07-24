@@ -2,6 +2,7 @@
 #define EPD_PAINTER_DEVICES_H
 
 #include "EPD_Painter.h"
+#include "EPD_Painter_trains.h"
 
 #if defined(EPD_PAINTER_PRESET_LILYGO_EPD47_H716) || defined(EPD_PAINTER_PRESET_AUTO)
 // -----------------------------------------------------------------------
@@ -61,6 +62,12 @@
         // Trains are calibrated at THESE periods.
         .g16_pass_us_normal = 20000,
         .g16_pass_us_high   = 24000,
+        .trains = {
+            .g16_apply  = TUNED16_H716_NORMAL,
+            .g16_remove = TUNED16_H716_NORMAL_REMOVE,
+            .dir_normal = DIRECT_H716_NORMAL,
+            .dir_fast   = DIRECT_H716_FAST,
+        },
     };
 #endif
 
@@ -108,6 +115,12 @@
             .high_darker    = { { 1, 3, 1, 1, 2, 2, 2, 1, 2, 1, 1, 2, 1 },
                                 { 3, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 2 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
+        },
+        .trains = {
+            .g16_apply  = TUNED16_M5PAPERS3_NORMAL,
+            .g16_remove = TUNED16_M5PAPERS3_NORMAL_REMOVE,
+            .dir_normal = DIRECT_M5PAPERS3_NORMAL,
+            .dir_fast   = DIRECT_M5PAPERS3_FAST,
         },
     };
 #endif
@@ -169,6 +182,12 @@
         // tuning cannot converge here (frame-composition shifts move
         // landings by 3-6 levels between frames; also a ~5-unit
         // top-to-bottom panel gradient, calibrate via the L15 pair).
+        .trains = {
+            .g16_apply  = TUNED16_LILYGO_T5S3_NORMAL,
+            .g16_remove = TUNED16_LILYGO_T5S3_NORMAL_REMOVE,
+            .dir_normal = DIRECT_LILYGO_T5S3_NORMAL,
+            .dir_fast   = DIRECT_LILYGO_T5S3_FAST,
+        },
     };
 #endif
 // -----------------------------------------------------------------------
@@ -213,6 +232,9 @@
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
         .shift = { .data = 2, .clk = 42, .strobe = 1, .le_time = 0 },
+        // No .trains: this variant has not had a scanner-tuning session.
+        // 16-grey runs on the formula library and direct transitions stay
+        // on the two-step path until a match-card session tunes it.
     };
 
 #endif

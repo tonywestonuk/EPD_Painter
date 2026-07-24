@@ -19,12 +19,14 @@ by batching per-line decisions into OR-merged sweeps.
 
 ## What to expect
 
-The sketch loads the scanner-tuned LilyGo T5 S3 GPS NORMAL train set
-(`tuned_trains_lilygo_t5s3.h`): apply trains matched against Bayer-dithered
-black/white references, and charge-matched remove trains (unpainting a
-level returns its net DC charge to zero — see the phase D notes in
-`DECISION_ENGINE.md`). On other boards the levels will be in order but not
-colour-accurate until the match-card loop is run for that panel.
+`setGreyLevels(16)` loads the board's scanner-tuned NORMAL train set from
+the preset (`Config::trains`, tables in `src/EPD_Painter_trains.h`): apply
+trains matched against Bayer-dithered black/white references, and
+charge-matched remove trains (unpainting a level returns its net DC charge
+to zero — see the phase D notes in `DECISION_ENGINE.md`). The M5PaperS3,
+LilyGo T5 S3 GPS and H716 are tuned; on an untuned board (H752) the
+formula library runs instead — levels in order but not colour-accurate
+until the match-card loop is run for that panel.
 
 Quality must be `QUALITY_NORMAL` or `QUALITY_HIGH`; 16-grey mode refuses
 `QUALITY_FAST` (7 undelayed passes cannot resolve 16 doses).

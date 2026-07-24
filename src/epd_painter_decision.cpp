@@ -440,9 +440,10 @@ uint32_t EPD_Painter::_decision_discover_direct() {
   return any_work;
 }
 
-// ---- placeholder train library (phase C) ----------------------------------
-// Formula trains for NORMAL/HIGH's 13 passes; phase D replaces these with
-// scanner-calibrated tables. Dose is counted in half-pass units: a darken
+// ---- train library --------------------------------------------------------
+// Formula trains for NORMAL/HIGH's 13 passes, overlaid with the preset's
+// scanner-tuned tables when the board has them (phase D — see
+// EPD_Painter_trains.h). Formula dose is counted in half-pass units: a darken
 // pass is 2 units, and an odd dose gets one extra darken pass immediately
 // half-undone by a whiten in the following pass — the pixel-cap retention
 // physics gives roughly a half-step net. 15 levels map onto doses
@@ -468,5 +469,16 @@ void EPD_Painter::_grey16_build_trains() {
     int wh = full + 3;                                  // erase with margin
     if (wh > DEC_WF_LEN16) wh = DEC_WF_LEN16;
     for (int p = 0; p < wh; p++) rm[p] = 2;             // whiten
+  }
+
+  // Overlay the preset's scanner-tuned tables. Both or neither: an apply
+  // without its charge-matched remove would break the DC ledger.
+  if (_config.trains.g16_apply && _config.trains.g16_remove) {
+    for (int g = 1; g <= 15; g++) {
+      memcpy(dec_trains16[(g << 1) | 0], _config.trains.g16_apply[g],
+             DEC_WF_LEN16);
+      memcpy(dec_trains16[(g << 1) | 1], _config.trains.g16_remove[g],
+             DEC_WF_LEN16);
+    }
   }
 }

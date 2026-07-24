@@ -20,9 +20,10 @@
 //   d  4-level direct grey-to-grey mode (seed trains)   D  transition card
 //   j <from> <to> <13 codes 0-2>  upload a direct train
 //
-// Trains are the phase C placeholder formula library; expect the levels to
-// be distinguishable and monotonic but not evenly spaced — even spacing is
-// phase D's scanner calibration.
+// Trains come from the preset's scanner-tuned tables (Config::trains, see
+// EPD_Painter_trains.h) — setGreyLevels(16) loads them automatically. On a
+// board without a tuned set the formula library runs instead: levels will
+// be distinguishable and monotonic but not evenly spaced.
 
 // Choose your board (or leave all commented for auto-probe).
 //#define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
@@ -32,27 +33,12 @@
 #include <Arduino.h>
 #include "EPD_Painter.h"
 #include "EPD_Painter_presets.h"
-#include "tuned_trains_lilygo_t5s3.h"
-#include "tuned_trains_m5papers3.h"
-#include "tuned_trains_h716.h"
-#include "direct_trains_m5papers3.h"
-#include "direct_trains_lilygo_t5s3.h"
-#include "direct_trains_h716.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
 static uint8_t *fb;
 static int W, H;
 static bool mode16 = true;   // '4'/'6' switch between 4-level and 16-grey
-
-// Pick the scanner-tuned set for the board the AUTO probe found: the
-// M5PaperS3 preset is the one with a power-latch pin (pin_syspwr).
-static void loadBoardTrains() {
-  if (epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
-      epd.getConfig().shift.data >= 0)   loadTunedTrainsH716(epd);
-  else if (epd.getConfig().pin_syspwr >= 0) loadTunedTrainsM5PaperS3(epd);
-  else                                      loadTunedTrains(epd);
-}
 
 // Paint twice: erased grey-to-grey pixels are redrawn on the second call
 // (the engine's two-step transition — see DECISION_ENGINE.md).
@@ -144,8 +130,8 @@ void setup() {
     Serial.println("setGreyLevels(16) failed");
     while (1) delay(1000);
   }
-  // Scanner-tuned trains for this board (LilyGo T5 S3 GPS or M5PaperS3).
-  loadBoardTrains();
+  // setGreyLevels(16) has loaded the preset's scanner-tuned trains
+  // (or the formula library on an untuned board).
 
   W = epd.getConfig().width;
   H = epd.getConfig().height;
@@ -422,7 +408,7 @@ void loop() {
     case '6':
       if (epd.setGreyLevels(16)) {
         mode16 = true;
-        loadBoardTrains();
+        epd.rebuildDecisionTrains();   // undo any 'F'/'t' experiments
         Serial.println("[grey16] 16-grey mode");
       } else Serial.println("[grey16] setGreyLevels(16) failed");
       break;
@@ -449,7 +435,7 @@ void loop() {
       Serial.println("[grey16] FORMULA removes loaded (unbalanced control)");
       break;
     case 'M':
-      loadBoardTrains();
+      epd.rebuildDecisionTrains();
       Serial.println("[grey16] charge-matched trains loaded");
       break;
     case 't': {
@@ -471,28 +457,16 @@ void loop() {
       }
     } break;
     case 'd':
-      // direct grey-to-grey mode: 4-level + direct engine + seed trains
+      // direct grey-to-grey mode: 4-level + direct engine. The library
+      // loads the preset's tuned trains for the current quality and
+      // re-loads them on every setQuality() ('f'/'N'/'H').
       if (!epd.setGreyLevels(4)) { Serial.println("[direct] setGreyLevels(4) failed"); break; }
       mode16 = false;
       if (!epd.setDirectTransitions(true)) { Serial.println("[direct] enable failed"); break; }
       directOn = true;
-      {
-        // Trains are per-board and per-quality: pick both.
-        const bool h716 = epd.getConfig().shift.driver == EPD_Painter::Shift::H716 &&
-                          epd.getConfig().shift.data >= 0;
-        const bool m5 = epd.getConfig().pin_syspwr >= 0;
-        const bool fast =
-            epd.getConfig().quality == EPD_Painter::Quality::QUALITY_FAST;
-        if (h716 && fast)     loadDirectTrainsH716Fast(epd);
-        else if (h716)        loadDirectTrainsH716(epd);
-        else if (m5 && fast)  loadDirectTrainsM5PaperS3Fast(epd);
-        else if (m5)          loadDirectTrainsM5PaperS3(epd);
-        else if (fast)        loadDirectTrainsLilygoFast(epd);
-        else                  loadDirectTrainsLilygo(epd);
-        Serial.printf("[direct] 4-level direct mode, %s %s trains loaded\n",
-                      h716 ? "H716" : (m5 ? "M5PaperS3" : "LilyGo"),
-                      fast ? "FAST" : "NORMAL");
-      }
+      Serial.printf("[direct] 4-level direct mode, preset %s trains\n",
+                    epd.getConfig().quality == EPD_Painter::Quality::QUALITY_FAST
+                        ? "FAST" : "NORMAL");
       break;
     case 'e':
       // A/B lever: toggle the direct engine (trains stay loaded)

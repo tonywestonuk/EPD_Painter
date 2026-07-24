@@ -95,6 +95,18 @@ struct PowerCtlConfig {
     enum Driver { H752, H716 } driver = H752;
   };
 
+  // Scanner-tuned decision-engine tables for a board (phase D — see
+  // DECISION_ENGINE.md and EPD_Painter_trains.h). All optional: a null
+  // g16 pair leaves the 16-grey mode on the formula library; a null
+  // direct table leaves that quality on the two-step transition path.
+  // Array bounds are DEC_WF_LEN16 / DEC_WF_LEN_DIR (asserted below).
+  struct TrainTables {
+      const uint8_t (*g16_apply)[13]     = nullptr;  // [16][13] apply trains
+      const uint8_t (*g16_remove)[13]    = nullptr;  // [16][13] charge-matched removes
+      const uint8_t (*dir_normal)[4][26] = nullptr;  // [4][4][26] NORMAL direct trains
+      const uint8_t (*dir_fast)[4][26]   = nullptr;  // [4][4][26] FAST direct trains
+  };
+
 
   struct Config {
       uint16_t width;
@@ -131,6 +143,11 @@ struct PowerCtlConfig {
       // register (H716) have much slower rows and need a longer period.
       int g16_pass_us_normal = 15000;
       int g16_pass_us_high   = 19000;
+
+      // Scanner-tuned trains for this board (null members = untuned; see
+      // TrainTables). setGreyLevels(16) and setDirectTransitions() load
+      // these automatically.
+      TrainTables trains{};
 
       // Returns a copy of this config with rotation set — lets you write:
       //   EPD_PainterAdafruit epd(EPD_PAINTER_PRESET.withRotation(EPD_Painter::Rotation::ROTATION_CW));
@@ -229,12 +246,23 @@ struct PowerCtlConfig {
       for (int p = 0; p < DEC_WF_LEN16; p++) dec_trains16[id][p] = train[p];
   }
 
+  // Rebuild the 16-grey train library to its defaults: the formula trains
+  // overlaid with the preset's scanner-tuned tables (Config::trains) when
+  // the board has them. Runs automatically on the first setGreyLevels(16);
+  // call it manually to undo experimental setDecisionTrain() uploads.
+  void rebuildDecisionTrains() { _grey16_build_trains(); }
+
   // Direct grey-to-grey transitions (4-level mode — see DECISION_ENGINE.md
   // "direct grey-to-grey transitions"). When on, a changed occupied pixel
   // whose (from, to) pair has a loaded train is driven straight to its new
   // level in ONE paint — no erase-to-white two-step. Pairs without a train
   // keep the legacy two-step, so the engine comes up one tuned pair at a
-  // time. First enable allocates 2 spill slot planes (~260 KB PSRAM).
+  // time. First enable allocates 2 spill slot planes (~260 KB PSRAM) and
+  // loads the preset's tuned tables for the current quality
+  // (Config::trains); setQuality() then keeps the loaded set matched to
+  // the quality (HIGH has no tuned set — pairs unload to the two-step).
+  // On a tuned board manual setDirectTrain() uploads therefore survive
+  // engine toggles but are replaced on a quality change.
   // Call after begin(). Returns false on allocation failure.
   bool setDirectTransitions(bool on);
 
@@ -395,6 +423,17 @@ private:
   static constexpr int DEC_IDS          = 32;  // 16 levels x 2 directions
   static constexpr int DEC_WF_LEN16     = 13;  // train length (NORMAL/HIGH)
   static constexpr int DEC_WF_LEN_DIR   = 26;  // max direct-train length
+  // TrainTables (declared before these constants exist) hard-codes the
+  // same lengths in its pointer types — keep them in lock-step. (Member
+  // access through a null pointer, not construction: an unevaluated
+  // TrainTables{} here would need its default member initializers, which
+  // are not parsed until the enclosing class is complete.)
+  static_assert(sizeof(*static_cast<TrainTables*>(nullptr)->g16_apply) ==
+                DEC_WF_LEN16,
+                "TrainTables g16 row length must equal DEC_WF_LEN16");
+  static_assert(sizeof(*static_cast<TrainTables*>(nullptr)->dir_normal) ==
+                4 * DEC_WF_LEN_DIR,
+                "TrainTables direct row length must equal DEC_WF_LEN_DIR");
   // 16-grey constant pass period (row loop + padding), per quality. A row
   // converts k sweeps, so the row loop's duration varies with content —
   // and pass duration IS the retention dose. Padding every pass to a
@@ -431,6 +470,10 @@ private:
   uint32_t _decision_discover_direct();
   void _decision_discover_direct_row(int row);
   uint8_t *_dec_plane_row_dir(int sweep, int row);
+  // Load the preset's direct tables for the current quality (no-op on
+  // boards with no tuned direct tables at all; a tuned board with no set
+  // for this quality — HIGH — unloads every pair to the two-step).
+  void _load_preset_direct_trains();
 
   // ---- 16-grey mode (phase C) ----
   // 4bpp desired/physical state, spill slot planes for sweeps 2..9 (sweep 0

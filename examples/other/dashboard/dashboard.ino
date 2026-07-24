@@ -23,8 +23,6 @@
 #include "EPD_Painter.h"
 #include "EPD_Painter_presets.h"
 #include "../megademo/font8x8_basic.h"
-#include "../grey16_testcard/direct_trains_m5papers3.h"
-#include "../grey16_testcard/direct_trains_lilygo_t5s3.h"
 
 EPD_Painter epd(EPD_PAINTER_PRESET);
 
@@ -259,10 +257,9 @@ void setup() {
   }
   epd.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
   // Direct grey-to-grey trains: arrow state changes (grey <-> black)
-  // complete in one paint instead of blinking through white.
+  // complete in one paint instead of blinking through white. Enabling
+  // loads the preset's tuned trains for the current quality.
   epd.setDirectTransitions(true);
-  if (epd.getConfig().pin_syspwr >= 0) loadDirectTrainsM5PaperS3(epd);
-  else                                 loadDirectTrainsLilygo(epd);
 
   W = epd.getConfig().width;
   H = epd.getConfig().height;

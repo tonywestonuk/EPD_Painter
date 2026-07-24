@@ -149,7 +149,30 @@ void EPD_Painter::setQuality(Quality quality) {
     printf("[EPD_Painter] QUALITY_FAST cannot express 16 greys — call setGreyLevels(4) first\n");
     return;
   }
+  const bool changed = (_config.quality != quality);
   _config.quality = quality;
+  // Direct trains are per-quality: once the direct engine has been
+  // enabled, keep the loaded set matched to the quality.
+  if (changed && dec_spill_dir) _load_preset_direct_trains();
+}
+
+// Load the preset's tuned direct tables for the current quality. Boards
+// with no tuned direct tables at all are left alone (fully manual); a
+// tuned board with no set for this quality unloads every pair so the
+// engine falls back to the DC-correct two-step.
+void EPD_Painter::_load_preset_direct_trains() {
+  if (!_config.trains.dir_normal && !_config.trains.dir_fast) return;
+  const uint8_t (*tbl)[4][DEC_WF_LEN_DIR] = nullptr;
+  switch (_config.quality) {
+    case Quality::QUALITY_NORMAL: tbl = _config.trains.dir_normal; break;
+    case Quality::QUALITY_FAST:   tbl = _config.trains.dir_fast;   break;
+    default: break;  // HIGH: no tuned set
+  }
+  for (int f = 1; f <= 3; f++)
+    for (int t = 1; t <= 3; t++)
+      if (f != t)
+        setDirectTrain((uint8_t)f, (uint8_t)t, tbl ? tbl[f][t] : nullptr,
+                       DEC_WF_LEN_DIR);
 }
 
 // =============================================================================
@@ -241,6 +264,10 @@ bool EPD_Painter::setDirectTransitions(bool on) {
       dec_sweeps_dir = nullptr;
       return false;
     }
+    // First enable: load the preset's tuned tables for the current
+    // quality. Later enables keep whatever is loaded, so the engine can
+    // be A/B-toggled without losing manually uploaded trains.
+    _load_preset_direct_trains();
   }
   _decision_direct = true;
   return true;

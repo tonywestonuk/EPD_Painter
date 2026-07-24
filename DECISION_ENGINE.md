@@ -244,7 +244,7 @@ fresh darkens).
 Calibration (testcard 'D', the transition-card method): paint every
 column's FROM level, repaint TO in a single paint, compare each
 transition column's landing against a reference column painted from
-white. M5PaperS3 NORMAL set (`direct_trains_m5papers3.h`): all six
+white. M5PaperS3 NORMAL set (`src/EPD_Painter_trains.h`): all six
 pairs within +3.5/−1.8 scan units of reference. Shape lessons mirror
 the remove work: trailing whitens poison landings (darkening directs
 put their balancing whitens FIRST); darkens after deep whitening ride
