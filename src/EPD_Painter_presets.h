@@ -26,17 +26,23 @@
         .i2c = { .sda = 18, .scl = 17, .freq = 100000 },
         .power = { .pca_addr = -1, .tps_addr = -1 },
         .waveforms = {
-            .fast_lighter   = { { 1, 3, 2, 3, 2, 2, 3 },
-                                { 3, 2, 3, 2, 2, 3, 2 },
+            // FAST pairs dither-match calibrated 22 Jul 2026 (dithertune
+            // --tier F: dark -0.4, light -2.6 in 2 iterations; FAST ghost
+            // residual 13.6 — tier-typical, apps hard-clear).
+            .fast_lighter   = { { 3, 3, 2, 3, 2, 2, 3 },
+                                { 2, 2, 3, 2, 2, 3, 2 },
                                 { 2, 2, 2, 2, 2, 2, 2 } },
-            .fast_darker    = { { 3, 1, 3, 2, 1, 1, 3 },
-                                { 1, 3, 1, 3, 1, 1, 3 },
+            .fast_darker    = { { 3, 1, 3, 3, 1, 1, 3 },
+                                { 1, 3, 1, 3, 1, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1 } },
+            // Dark-grey pair (row 1) dither-match calibrated 22 Jul 2026
+            // (dithertune h716_normal: dark -1.5, light +0.9, 2 iterations;
+            // ghost residual 7.5 vs the 5-6 floor of the other boards).
             .normal_lighter = { { 1, 1, 1, 1, 2, 3, 3, 2, 2, 2, 2, 2, 2 },
-                                { 2, 1, 2, 2, 1, 2, 2, 2, 0, 0, 2, 2, 3 },
+                                { 3, 3, 2, 2, 1, 2, 2, 2, 0, 0, 2, 2, 3 },
                                 { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 } },
             .normal_darker  = { { 1, 2, 1, 3, 1, 3, 1, 2, 2, 1, 2, 1, 1 },
-                                { 1, 1, 1, 2, 2, 3, 1, 1, 3, 2, 1, 1, 3 },
+                                { 1, 1, 1, 2, 3, 3, 1, 1, 3, 3, 1, 1, 3 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
             .high_lighter   = { { 1, 3, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 2 },
                                 { 1, 1, 2, 2, 1, 2, 2, 2, 2, 1, 2, 2, 2 },
@@ -47,6 +53,14 @@
         },
         .shift = { .data = 13, .clk = 12, .strobe = 0, .le_time = 0,
                    .driver = EPD_Painter::Shift::H716 },
+        // Row-loop cost here is conversion-bound like every board (the
+        // shift register adds only ~1us/row via the fast-GPIO path;
+        // measured: LE pulse 1.17us). Typical worst passes ~16 ms; the
+        // pathological full-screen-inversion case overruns and clamps to
+        // the settle floor, same as the M5PaperS3 at its 15 ms period.
+        // Trains are calibrated at THESE periods.
+        .g16_pass_us_normal = 20000,
+        .g16_pass_us_high   = 24000,
     };
 #endif
 
@@ -145,6 +159,16 @@
                                 { 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1 },
                                 { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } },
         },
+        // MEASURED 24 Jul 2026: this panel's re-darkens are weaker than
+        // the M5PaperS3's — at the default 15 ms period its 16-grey
+        // black floors at ~67 while the glass reaches ~51 at 20 ms (the
+        // H716's cure). The tuned tables below are 15 ms tables, so the
+        // period stays 15 ms until a 20 ms retune session lands: raising
+        // it without retuning scrambles the ladder (verified). The 20 ms
+        // retune must use the match-card method — staircase-vs-anchor
+        // tuning cannot converge here (frame-composition shifts move
+        // landings by 3-6 levels between frames; also a ~5-unit
+        // top-to-bottom panel gradient, calibrate via the L15 pair).
     };
 #endif
 // -----------------------------------------------------------------------

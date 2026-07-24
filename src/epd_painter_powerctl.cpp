@@ -7,6 +7,16 @@
   #include "freertos/task.h"
 #endif
 
+// Routine power-cycle trace. With idle power-off (default 5s) powerOn/powerOff
+// run constantly, so the per-cycle messages are compiled out unless
+// EPD_DEBUG_REGISTERS is defined. Errors always print.
+//#define EPD_DEBUG_REGISTERS
+#ifdef EPD_DEBUG_REGISTERS
+#define EPD_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define EPD_DEBUG_PRINT(...)
+#endif
+
 epd_painter_powerctl::epd_painter_powerctl() {
   _pca_out[0] = 0x00;
   _pca_out[1] = 0x00;
@@ -50,7 +60,7 @@ bool epd_painter_powerctl::powerOn() {
 }
 
 bool epd_painter_powerctl::powerOnLocked() {
-  printf("[PWRCTL] Power-on sequence... \n");
+  EPD_DEBUG_PRINT("[PWRCTL] Power-on sequence... \n");
 
   if (!pcaWrite(PIN_OE, true))     return false;
   if (!pcaWrite(PIN_MODE, true))   return false;
@@ -60,12 +70,12 @@ bool epd_painter_powerctl::powerOnLocked() {
 
   EPD_DELAY_MS(3);
 
-  printf("[PWRCTL] Waiting for PWR_GOOD...");
+  EPD_DEBUG_PRINT("[PWRCTL] Waiting for PWR_GOOD...");
   int timeout = 0;
   bool good = false;
   while (timeout < 400) {
     if (!pcaRead(PIN_PWRGOOD, good)) {
-      printf(" read error \n");
+      printf("[PWRCTL] PWR_GOOD read error\n");
       return false;
     }
     if (good) break;
@@ -73,10 +83,10 @@ bool epd_painter_powerctl::powerOnLocked() {
     ++timeout;
   }
   if (!good) {
-    printf(" TIMEOUT \n");
+    printf("[PWRCTL] PWR_GOOD timeout\n");
     return false;
   }
-  printf(" OK (%d ms)\n", timeout);
+  EPD_DEBUG_PRINT(" OK (%d ms)\n", timeout);
 
   if (!tpsWrite(TPS_UPSEQ0, 0xE1)) return false;
   if (!tpsWrite(TPS_UPSEQ1, 0xAA)) return false;
@@ -89,14 +99,14 @@ bool epd_painter_powerctl::powerOnLocked() {
   tpsRead(TPS_VCOM1, v1);
   tpsRead(TPS_VCOM2, v2);
   int vcom_mv = -(((int)(v2 & 0x01) << 8 | v1) * 10);
-  printf("[PWRCTL] TPS VCOM = %d mV (VCOM1=0x%02X VCOM2=0x%02X)\n", vcom_mv, v1, v2);
+  EPD_DEBUG_PRINT("[PWRCTL] TPS VCOM = %d mV (VCOM1=0x%02X VCOM2=0x%02X)\n", vcom_mv, v1, v2);
 
-  printf("[PWRCTL] Waiting for TPS PG...");
+  EPD_DEBUG_PRINT("[PWRCTL] Waiting for TPS PG...");
   timeout = 0;
   uint8_t pg = 0;
   while (timeout < 400) {
     if (!tpsRead(TPS_PG, pg)) {
-      printf(" read error \n");
+      printf("[PWRCTL] TPS PG read error\n");
       return false;
     }
     if ((pg & 0xFA) == 0xFA) break;
@@ -104,15 +114,17 @@ bool epd_painter_powerctl::powerOnLocked() {
     ++timeout;
   }
 
-  printf(" PG=0x%02X (%d ms) %s\n",
-         pg, timeout, ((pg & 0xFA) == 0xFA) ? "OK" : "TIMEOUT");
-
-  return ((pg & 0xFA) == 0xFA);
+  if ((pg & 0xFA) != 0xFA) {
+    printf("[PWRCTL] TPS PG timeout (PG=0x%02X after %d ms)\n", pg, timeout);
+    return false;
+  }
+  EPD_DEBUG_PRINT(" PG=0x%02X (%d ms) OK\n", pg, timeout);
+  return true;
 }
 
 void epd_painter_powerctl::powerOff() {
   if (_mtx) xSemaphoreTake(_mtx, portMAX_DELAY);
-  printf("[PWRCTL] Power-off... \n");
+  EPD_DEBUG_PRINT("[PWRCTL] Power-off... \n");
 
   // Disable the TPS65185 rails (VPOS/VNEG/VGH/VGL/VCOM) first.  Without
   // this the rails stay hot even though the PCA9555 controls go low,
@@ -299,13 +311,6 @@ bool epd_painter_powerctl::tpsRead(uint8_t reg, uint8_t& val) {
   return false;  // I2C not used in ESP-IDF builds
 #endif
 }
-
-//#define EPD_DEBUG_REGISTERS
-#ifdef EPD_DEBUG_REGISTERS
-#define EPD_DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define EPD_DEBUG_PRINT(...)
-#endif
 
 bool epd_painter_powerctl_74HCT4094D::begin(EPD_Painter::Config& cfg) {
   gpio_reset_pin((gpio_num_t)cfg.shift.clk);

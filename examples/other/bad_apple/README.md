@@ -11,10 +11,15 @@ pixel processing at all — each frame is one SD read and one `paintPacked()` ca
 1. **Convert a video** (needs `python3` with `numpy`, and `ffmpeg` on PATH):
 
    ```sh
-   python3 video2epv.py your_video.mp4 badapple.epv --fps 20
+   python3 video2epv.py your_video.mp4 heaven7.epv --fps 20
    ```
 
-2. **Copy** `badapple.epv` to the root of a FAT32 SD card.
+2. **Copy** your `.epv` files into a **`videos` folder** in the root of a
+   FAT32 SD card. One video plays immediately; several bring up a picker
+   on the panel — tap a title to play it (or send its number over serial),
+   and tap the screen during playback to get the picker back. A lone
+   `badapple.epv` in the card root still works, for cards made before the
+   picker existed.
 
 3. **Pick your board** at the top of `bad_apple.ino`:
 
@@ -22,6 +27,12 @@ pixel processing at all — each frame is one SD read and one `paintPacked()` ca
    #define EPD_PAINTER_PRESET_LILYGO_T5_S3_GPS
    // #define EPD_PAINTER_PRESET_M5PAPER_S3
    ```
+
+   The sketch needs the
+   [GT911 Lite](https://github.com/tonywestonuk/gt911-arduino) library for
+   the picker's touch support (both supported boards have a GT911 touch
+   panel). If no touch controller answers at runtime, the picker still
+   works over serial.
 
 4. **Flash** the sketch, insert the card, enjoy. The serial monitor (115200)
    prints a stats line every 5 seconds:
