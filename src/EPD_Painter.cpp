@@ -716,7 +716,9 @@ void EPD_Painter::debugPinBench() {
 }
 
 void EPD_Painter::powerOn() {
+#ifdef EPD_DEBUG_REGISTERS
   printf("[EPD] panel power ON\n");
+#endif
   _pin_le->set(false);
   _pin_spv->set(false);
   _pin_sph->set(false);
@@ -756,7 +758,9 @@ void EPD_Painter::powerOn() {
 }
 
 void EPD_Painter::powerOff() {
+#ifdef EPD_DEBUG_REGISTERS
   printf("[EPD] panel power OFF\n");
+#endif
   _powerDriver->powerOff();
 }
 
@@ -769,68 +773,6 @@ int EPD_Painter::readPanelTemperatureC() {
 // Waveform tables are defined per-device in EPD_Painter_presets.h
 // and stored in _config.waveforms.
 
-
-// =============================================================================
-// debugRowTest() — TEMPORARY hardware probe for the double-latch question.
-//
-// Drives a stripe pattern (1 black row every 6) three ways:
-//   band 1 rows   0..179: stripe row = one BLACK transmission (reference)
-//   band 2 rows 180..359: stripe row = BLACK transmission, then a FLOAT
-//                         transmission latched with noAdvance
-//   band 3 rows 360..539: stripe row = FLOAT transmission, then a BLACK
-//                         transmission latched with noAdvance
-//
-// If a gate row can be driven twice: all three bands show identical stripe
-// alignment. If the second latch lands on a different row, band 3's stripes
-// are displaced relative to bands 1/2 — and the displacement direction gives
-// the true latch/advance pairing.
-//
-// Raw drive codes per pixel pair: 0b10 = darken, 0b01 = whiten, 0b00 = float.
-// =============================================================================
-void EPD_Painter::debugRowTest() {
-  PanelPowerGuard guard(*this);
-  const int H = _config.height;
-  const uint8_t BLACK = 0x55;   // all 4 pixels: drive dark (code 0b01 — the
-                                // darker waveform tables are built from 1s)
-  const uint8_t FLOAT = 0x00;
-
-  for (int pass = 0; pass < 8; pass++) {
-    bool no_adv = false;
-    for (int row = 0; row < H; row++) {
-      const bool stripe = (row % 6) == 0;
-      const int  band   = row < 180 ? 1 : (row < 360 ? 2 : 3);
-
-      uint8_t first  = FLOAT;
-      uint8_t second = FLOAT;
-      bool    dbl    = false;
-      if (stripe) {
-        if (band == 1)      { first = BLACK; }
-        else if (band == 2) { first = BLACK; second = FLOAT; dbl = true; }
-        else                { first = FLOAT; second = BLACK; dbl = true; }
-      }
-
-      memset(dma_buffer, first, packed_row_bytes);
-      sendRow(row == 0, false, no_adv);
-      no_adv = false;
-
-      if (dbl) {
-        memset(dma_buffer, second, packed_row_bytes);
-        sendRow(false, false, false);
-        no_adv = true;
-      }
-    }
-    if (no_adv) {
-      memset(dma_buffer, FLOAT, packed_row_bytes);
-      sendRow(false, false, true);
-    }
-  }
-
-  // Final all-float pass to leave the panel undriven
-  for (int row = 0; row < H; row++) {
-    memset(dma_buffer, FLOAT, packed_row_bytes);
-    sendRow(row == 0, row == H - 1);
-  }
-}
 
 // =============================================================================
 // paint()
@@ -1222,8 +1164,8 @@ void EPD_Painter::_paint_task_body() {
         // transmission with full retention dose. (Driving the row once per
         // sweep instead does NOT work — a second latch cuts the first
         // data's retention from a full pass period to one ~30us row slot,
-        // starving its dose to nothing. Verified optically with the
-        // debugRowTest() stripe probe.)
+        // starving its dose to nothing. Verified optically with a
+        // three-band stripe probe.)
         memset(dma_buffer, 0x00, packed_row_bytes);
         const LineSweep *ls = &sweep_list[row * sweep_stride];
         const int n = dec_nsweeps[row];

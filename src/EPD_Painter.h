@@ -173,11 +173,6 @@ struct PowerCtlConfig {
   // clear only those areas. tolerance is passed to computeDirtyRects.
   void clearDirtyAreas(uint8_t* framebuffer, int tolerance = 0, ClearMode mode = ClearMode::SOFT);
 
-  // TEMPORARY hardware probe: manually drives a three-band stripe pattern
-  // with raw drive codes to establish whether one gate row can be latched
-  // and driven twice (LE without CKV). See implementation for band layout.
-  void debugRowTest();
-
   void fxClear();
   void clearBuffers();  // zero all packed buffers (call before power-off to reset DC-balance baseline)
   void paint(uint8_t* framebuffer);
@@ -339,8 +334,8 @@ struct PowerCtlConfig {
   // proves an EXTERNAL write (heap-neighbour overflow) corrupted the
   // delta engine's map of the glass — the exact mechanism behind
   // "ghosts ordinary paints cannot erase but clear() can". Announces
-  // loudly with heap watermarks. Costs ~1-2 ms per paint; setStateGuard
-  // (false) disables for release/video builds.
+  // loudly with heap watermarks. Costs ~1-2 ms per paint, so it is OFF
+  // by default — setStateGuard(true) enables it when chasing corruption.
   void setStateGuard(bool on) { _sb_guard_on = on; _sb_guard_valid = false; }
 
   // Idle panel power-off: rails power down after `seconds` without a
@@ -469,7 +464,7 @@ private:
   Quality  _tpl_quality  = Quality::QUALITY_NORMAL;
 
   // ---- screenbuffer state guard ----
-  bool     _sb_guard_on = true;
+  bool     _sb_guard_on = false;
   bool     _sb_guard_valid = false;
   uint8_t *_sb_shadow = nullptr; // full copy: fingerprints foreign writes
   uint32_t _sb_guard_hits = 0;   // retained: external screenbuffer writes
